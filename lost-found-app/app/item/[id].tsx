@@ -5,6 +5,20 @@ import { doc, getDoc, setDoc, updateDoc, serverTimestamp, collection, query, whe
 import { db, auth } from '../../services/firebase';
 import { Ionicons } from '@expo/vector-icons';
 
+const CATEGORY_STYLES: Record<string, { color: string; bg: string }> = {
+  'electronics': { color: 'text-blue-700', bg: 'bg-blue-50' },
+  'wallet': { color: 'text-green-700', bg: 'bg-green-50' },
+  'documents': { color: 'text-red-700', bg: 'bg-red-50' },
+  'keys': { color: 'text-yellow-700', bg: 'bg-yellow-50' },
+  'clothing': { color: 'text-purple-700', bg: 'bg-purple-50' },
+  'others': { color: 'text-slate-700', bg: 'bg-slate-50' },
+};
+
+const getCategoryStyle = (category: string) => {
+  const cat = category?.toLowerCase() || 'others';
+  return CATEGORY_STYLES[cat] || CATEGORY_STYLES['others'];
+};
+
 export default function ItemDetailScreen() {
   const router = useRouter();
   const { id, type } = useLocalSearchParams(); 
@@ -13,9 +27,14 @@ export default function ItemDetailScreen() {
   const [loading, setLoading] = useState(true);
   const [claiming, setClaiming] = useState(false);
   const [userClaimId, setUserClaimId] = useState<string | null>(null);
-  
+  const [currentUser, setCurrentUser] = useState(auth.currentUser);
   const [isClaimModalVisible, setIsClaimModalVisible] = useState(false);
   const [proofDescription, setProofDescription] = useState('');
+
+  useEffect(() => {
+    const unsubscribe = auth.onAuthStateChanged(user => setCurrentUser(user));
+    return unsubscribe;
+  }, []);
 
   useEffect(() => {
     const fetchItemAndClaim = async () => {
@@ -31,11 +50,11 @@ export default function ItemDetailScreen() {
           return;
         }
 
-        if (auth.currentUser) {
+        if (currentUser) {
           const claimQ = query(
              collection(db, 'claims'), 
              where('itemId', '==', id), 
-             where('claimantId', '==', auth.currentUser!.uid)
+             where('claimantId', '==', currentUser.uid)
           );
           const claimSnap = await getDocs(claimQ);
           if (!claimSnap.empty) {
@@ -50,10 +69,10 @@ export default function ItemDetailScreen() {
       }
     };
     fetchItemAndClaim();
-  }, [id, type]);
+  }, [id, type, currentUser]);
 
   const handleClaimInitiate = () => {
-    if (!auth.currentUser) {
+    if (!currentUser) {
       Alert.alert('Authentication Required', 'Please log in to claim an item.');
       return;
     }
@@ -70,34 +89,46 @@ export default function ItemDetailScreen() {
     setClaiming(true);
     try {
       // 0. Double check we have all data
-      if (!auth.currentUser || !item) {
+      if (!currentUser || !item) {
         Alert.alert('Error', 'Session lost. Please log in again.');
         return;
       }
 
-      // 1. Create claim doc
-      console.log("📝 Step 1: Creating claim document...");
+      // 1. Fetch profiles for claimant and owner
+      console.log("👤 Fetching user profiles...");
+      const claimantDoc = await getDoc(doc(db, 'users', currentUser.uid));
+      const ownerDoc = await getDoc(doc(db, 'users', item.userId));
+      
+      const claimantData = claimantDoc.exists() ? claimantDoc.data() : {};
+      const ownerData = ownerDoc.exists() ? ownerDoc.data() : {};
+
+      // 2. Create claim doc
+      console.log("📝 Step 2: Creating claim document...");
       const claimRef = doc(collection(db, 'claims'));
       const claimData = {
         itemId: id,
         itemType: type,
-        claimantId: auth.currentUser.uid,
+        itemTitle: item.title,
+        claimantId: currentUser.uid,
+        claimantName: claimantData.name || currentUser.displayName || 'Unknown User',
+        claimantClass: claimantData.studentClass || 'Unknown Class',
         ownerId: item.userId || '',
+        ownerName: ownerData.name || 'Owner',
         status: 'pending',
         proofDescription: proofDescription.trim(),
         createdAt: serverTimestamp()
       };
       
       await setDoc(claimRef, claimData);
-      console.log("✅ Step 1 complete");
+      console.log("✅ Step 2 complete");
       
-      // 2. Update item status (Safe partial update)
-      console.log("🔄 Step 2: Updating item status...");
+      // 3. Update item status (Safe partial update)
+      console.log("🔄 Step 3: Updating item status...");
       const itemRef = doc(db, type as string, id as string);
       await updateDoc(itemRef, {
         status: 'pending_claim'
       });
-      console.log("✅ Step 2 complete");
+      console.log("✅ Step 3 complete");
       
       setIsClaimModalVisible(false);
       Alert.alert('Success 🎉', 'Claim submitted! The owner will review your proof soon.');
@@ -130,7 +161,7 @@ export default function ItemDetailScreen() {
 
   if (!item) return null;
 
-  const isOwner = auth.currentUser?.uid === item.userId;
+  const isReporter = currentUser?.uid === item.userId;
   const isPending = item.status === 'pending_claim';
 
   return (
@@ -161,7 +192,11 @@ export default function ItemDetailScreen() {
           )}
         </View>
 
-        <Text className="text-primary text-sm font-semibold mb-6">{item.category}</Text>
+        <View className={`self-start px-3 py-1 rounded-full mb-6 ${getCategoryStyle(item.category).bg}`}>
+          <Text className={`text-xs font-bold uppercase tracking-widest ${getCategoryStyle(item.category).color}`}>
+            {item.category}
+          </Text>
+        </View>
 
         <View className="bg-surface p-4 rounded-2xl border border-gray-100 shadow-sm mb-6">
           <Text className="text-sm text-textLight mb-1">Description</Text>
@@ -191,7 +226,7 @@ export default function ItemDetailScreen() {
           </View>
         )}
 
-        {!isOwner && item.status !== 'claimed' && (
+        {!isReporter && item.status !== 'claimed' && (
           <>
             {userClaimId ? (
               <TouchableOpacity 
@@ -217,7 +252,7 @@ export default function ItemDetailScreen() {
           </>
         )}
 
-        {isOwner && isPending && (
+        {isReporter && isPending && (
           <View className="bg-orange-50 p-4 rounded-xl border border-orange-200">
             <Text className="text-orange-800 text-center font-bold">
               Someone has claimed this item! Check your Profile to review.

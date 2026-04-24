@@ -159,9 +159,20 @@ export default function ChatScreen() {
         <TouchableOpacity onPress={() => router.back()} className="mr-4">
           <Ionicons name="arrow-back" size={24} color="#4F46E5" />
         </TouchableOpacity>
-        <View>
-          <Text className="text-lg font-bold text-text">Item Chat</Text>
-          <Text className="text-xs text-textLight">Claim ID: {id?.slice(0, 8)}...</Text>
+        <View className="flex-1">
+          <Text className="text-lg font-bold text-text">
+            {claim ? (
+              auth.currentUser?.uid === claim.ownerId 
+                ? (claim as any).claimantName || 'Claimant'
+                : (claim as any).ownerName || 'Owner'
+            ) : 'Chat'}
+          </Text>
+          <Text className="text-xs text-textLight" numberOfLines={1}>
+            {(claim as any)?.itemTitle || 'Lost & Found Item'}
+          </Text>
+        </View>
+        <View className="bg-primary/10 px-3 py-1 rounded-full">
+           <Text className="text-primary text-[10px] font-bold uppercase">Active Chat</Text>
         </View>
       </View>
 

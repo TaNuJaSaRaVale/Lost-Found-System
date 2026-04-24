@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, Alert, ActivityIndicator, Image } from 'react-native';
 import { useRouter } from 'expo-router';
 import { signInWithEmailAndPassword } from 'firebase/auth';
 import { auth, testFirebaseConnection } from '../../services/firebase';
@@ -40,8 +40,11 @@ export default function LoginScreen() {
   return (
     <View className="flex-1 justify-center px-6 bg-background">
       <View className="items-center mb-10">
-        <Text className="text-4xl font-bold text-primary mb-2">Campus Lost & Found</Text>
-        <Text className="text-textLight text-lg text-center">Find what you lost, return what you found.</Text>
+        <Image 
+          source={require('../../assets/images/logo.png')} 
+          style={{ width: 180, height: 180 }}
+          resizeMode="contain"
+        />
       </View>
 
       <View className="bg-surface p-6 rounded-3xl shadow-sm border border-gray-100">

@@ -12,9 +12,12 @@ export default function ProfileScreen() {
   const [activeReturns, setActiveReturns] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [userName, setUserName] = useState('');
-  const [isEditingName, setIsEditingName] = useState(false);
+  const [studentClass, setStudentClass] = useState('');
+  const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [newName, setNewName] = useState('');
-  const [savingName, setSavingName] = useState(false);
+  const [newClass, setNewClass] = useState('');
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [resolvedClaims, setResolvedClaims] = useState<any[]>([]);
 
   useEffect(() => {
     if (!auth.currentUser) return;
@@ -23,9 +26,13 @@ export default function ProfileScreen() {
       try {
         const userDoc = await getDoc(doc(db, 'users', auth.currentUser!.uid));
         if (userDoc.exists()) {
-          const fetchedName = userDoc.data().name || auth.currentUser?.displayName || '';
+          const data = userDoc.data();
+          const fetchedName = data.name || auth.currentUser?.displayName || '';
+          const fetchedClass = data.studentClass || '';
           setUserName(fetchedName);
+          setStudentClass(fetchedClass);
           setNewName(fetchedName);
+          setNewClass(fetchedClass);
         }
       } catch (error) {
          console.error("Error fetching user profile:", error);
@@ -56,9 +63,21 @@ export default function ProfileScreen() {
       setActiveReturns(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     });
 
+    // 3. Listen for Resolved (Returned) Claims
+    const qResolved = query(
+      collection(db, 'claims'),
+      where('ownerId', '==', auth.currentUser.uid),
+      where('status', '==', 'returned')
+    );
+
+    const unsubscribeResolved = onSnapshot(qResolved, (snapshot) => {
+      setResolvedClaims(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
+
     return () => {
       unsubscribePending();
       unsubscribeApproved();
+      unsubscribeResolved();
     };
   }, []);
 
@@ -70,27 +89,29 @@ export default function ProfileScreen() {
     }
   };
 
-  const handleUpdateName = async () => {
-    if (!newName.trim()) {
-      Alert.alert('Error', 'Name cannot be empty.');
+  const handleUpdateProfile = async () => {
+    if (!newName.trim() || !newClass.trim()) {
+      Alert.alert('Error', 'Name and Class cannot be empty.');
       return;
     }
     try {
-      setSavingName(true);
+      setSavingProfile(true);
       if (auth.currentUser) {
         await updateProfile(auth.currentUser, { displayName: newName.trim() });
         await updateDoc(doc(db, 'users', auth.currentUser.uid), {
-          name: newName.trim()
+          name: newName.trim(),
+          studentClass: newClass.trim()
         });
         setUserName(newName.trim());
-        setIsEditingName(false);
-        Alert.alert('Success', 'Profile name updated successfully.');
+        setStudentClass(newClass.trim());
+        setIsEditingProfile(false);
+        Alert.alert('Success', 'Profile updated successfully.');
       }
     } catch (error) {
-      console.error("Error updating name:", error);
-      Alert.alert('Error', 'Failed to update name.');
+      console.error("Error updating profile:", error);
+      Alert.alert('Error', 'Failed to update profile.');
     } finally {
-      setSavingName(false);
+      setSavingProfile(false);
     }
   };
 
@@ -146,32 +167,38 @@ export default function ProfileScreen() {
            <Text className="text-3xl font-bold text-primary">👤</Text>
         </View>
         
-        {isEditingName ? (
+        {isEditingProfile ? (
           <View className="w-full mb-4">
             <TextInput
-              className="bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 mb-2 text-text text-base"
+              className="bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 mb-3 text-text text-base"
               placeholder="Full Name"
               value={newName}
               onChangeText={setNewName}
-              autoFocus
             />
-            <View className="flex-row justify-end space-x-2">
+            <TextInput
+              className="bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 mb-3 text-text text-base"
+              placeholder="Class (e.g. 2nd Year AIML)"
+              value={newClass}
+              onChangeText={setNewClass}
+            />
+            <View className="flex-row justify-end space-x-2 gap-2">
               <TouchableOpacity 
                 className="bg-gray-200 py-2 px-4 rounded-xl"
                 onPress={() => {
-                  setIsEditingName(false);
+                  setIsEditingProfile(false);
                   setNewName(userName);
+                  setNewClass(studentClass);
                 }}
-                disabled={savingName}
+                disabled={savingProfile}
               >
                 <Text className="text-text font-bold">Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity 
                 className="bg-primary py-2 px-4 rounded-xl"
-                onPress={handleUpdateName}
-                disabled={savingName}
+                onPress={handleUpdateProfile}
+                disabled={savingProfile}
               >
-                {savingName ? (
+                {savingProfile ? (
                   <ActivityIndicator color="#fff" size="small" />
                 ) : (
                   <Text className="text-white font-bold">Save</Text>
@@ -185,10 +212,11 @@ export default function ProfileScreen() {
               <Text className="text-2xl font-bold text-text mr-2">
                 {userName || "Your Profile"}
               </Text>
-              <TouchableOpacity onPress={() => setIsEditingName(true)}>
+              <TouchableOpacity onPress={() => setIsEditingProfile(true)}>
                 <Text className="text-primary text-sm font-bold">Edit</Text>
               </TouchableOpacity>
             </View>
+            <Text className="text-primary font-medium mb-1">{studentClass || "Add Your Class"}</Text>
             <Text className="text-textLight">{auth.currentUser?.email}</Text>
           </View>
         )}
@@ -215,11 +243,19 @@ export default function ProfileScreen() {
           <View key={claim.id} className="bg-surface p-5 rounded-3xl shadow-sm border border-yellow-200 mb-4">
             <View className="flex-row items-center mb-2">
               <View className="bg-yellow-100 p-2 rounded-full mr-2">
-                <Ionicons name="alert-circle" size={18} color="#b45309" />
+                <Ionicons name="person-circle" size={18} color="#b45309" />
               </View>
-              <Text className="text-lg font-bold text-text">Verify Claim</Text>
+              <Text className="text-lg font-bold text-text">
+                {claim.claimantName || 'Someone'} has claimed
+              </Text>
             </View>
             
+            <View className="flex-row items-center mb-3">
+               <Text className="text-primary font-bold text-sm bg-primary/10 px-2 py-0.5 rounded-lg">
+                 {claim.claimantClass || 'General'}
+               </Text>
+            </View>
+
             <Text className="text-sm text-textLight mb-4 italic">"{claim.itemTitle || 'Unknown Item'}"</Text>
 
             <View className="bg-gray-50 p-4 rounded-2xl mb-4 border border-gray-100">
@@ -248,7 +284,7 @@ export default function ProfileScreen() {
               onPress={() => router.push(`/chat/${claim.id}`)}
             >
               <Ionicons name="chatbubbles-outline" size={18} color="#4F46E5" />
-              <Text className="text-primary font-bold ml-2">Chat with Claimant</Text>
+              <Text className="text-primary font-bold ml-2">Chat with {claim.claimantName || 'Claimant'}</Text>
             </TouchableOpacity>
           </View>
         ))
@@ -260,12 +296,16 @@ export default function ProfileScreen() {
           <Text className="text-xl font-bold text-text mb-4 mt-6">Ongoing Returns</Text>
           {activeReturns.map(claim => (
             <View key={claim.id} className="bg-surface p-5 rounded-3xl shadow-sm border border-green-100 mb-4">
-              <View className="flex-row items-center mb-3">
+              <View className="flex-row items-center mb-1">
                 <View className="bg-green-100 p-2 rounded-full mr-2">
                   <Ionicons name="checkmark-circle" size={18} color="#059669" />
                 </View>
-                <Text className="text-lg font-bold text-text">Coordinate Handover</Text>
+                <Text className="text-lg font-bold text-text">Return to {claim.claimantName || 'Claimant'}</Text>
               </View>
+              
+              <Text className="text-primary font-medium text-xs mb-3 ml-10">
+                Class: {claim.claimantClass || 'N/A'}
+              </Text>
 
               <Text className="text-sm text-textLight mb-4 italic">"{claim.itemTitle || 'Unknown Item'}"</Text>
 
@@ -283,6 +323,36 @@ export default function ProfileScreen() {
               >
                 <Ionicons name="bag-check" size={18} color="#059669" />
                 <Text className="text-green-700 font-extrabold ml-2">Mark as Returned</Text>
+              </TouchableOpacity>
+            </View>
+          ))}
+        </>
+      )}
+
+      {/* Resolved Section */}
+      {resolvedClaims.length > 0 && (
+        <>
+          <Text className="text-xl font-bold text-text mb-4 mt-6">Recently Resolved</Text>
+          {resolvedClaims.map(claim => (
+            <View key={claim.id} className="bg-gray-50 p-5 rounded-3xl border border-gray-200 mb-4 opacity-80">
+              <View className="flex-row justify-between items-start mb-2">
+                <View>
+                  <Text className="text-base font-bold text-text">Returned to {claim.claimantName}</Text>
+                  <Text className="text-xs text-textLight">{claim.claimantClass}</Text>
+                </View>
+                <View className="bg-gray-200 px-2 py-1 rounded-lg">
+                  <Text className="text-gray-600 text-[10px] font-bold uppercase">Resolved</Text>
+                </View>
+              </View>
+              
+              <Text className="text-xs text-textLight mb-4 italic">Item: "{claim.itemTitle}"</Text>
+
+              <TouchableOpacity 
+                className="bg-gray-200 py-4 rounded-2xl items-center flex-row justify-center"
+                onPress={() => router.push(`/chat/${claim.id}`)}
+              >
+                <Ionicons name="chatbubbles-outline" size={18} color="#4b5563" />
+                <Text className="text-gray-700 font-bold ml-2">Contact Claimant (Fraud Check)</Text>
               </TouchableOpacity>
             </View>
           ))}

@@ -7,6 +7,20 @@ import { Ionicons } from '@expo/vector-icons';
 
 const FILTER_STATUSES = ['All', 'Open', 'Pending', 'Returned'];
 
+const CATEGORY_STYLES: Record<string, { color: string; bg: string }> = {
+  'electronics': { color: 'text-blue-700', bg: 'bg-blue-50' },
+  'wallet': { color: 'text-green-700', bg: 'bg-green-50' },
+  'documents': { color: 'text-red-700', bg: 'bg-red-50' },
+  'keys': { color: 'text-yellow-700', bg: 'bg-yellow-50' },
+  'clothing': { color: 'text-purple-700', bg: 'bg-purple-50' },
+  'others': { color: 'text-slate-700', bg: 'bg-slate-50' },
+};
+
+const getCategoryStyle = (category: string) => {
+  const cat = category?.toLowerCase() || 'others';
+  return CATEGORY_STYLES[cat] || CATEGORY_STYLES['others'];
+};
+
 export default function LostItemsScreen() {
   const router = useRouter();
   const [items, setItems] = useState<any[]>([]);
@@ -126,9 +140,11 @@ export default function LostItemsScreen() {
                   </Text>
                 </View>
                 
-                <Text className="text-primary text-xs font-bold mb-3 uppercase tracking-wider">
-                  {item.category}
-                </Text>
+                <View className={`self-start px-2 py-0.5 rounded-lg mb-3 ${getCategoryStyle(item.category).bg}`}>
+                  <Text className={`text-[10px] font-bold uppercase tracking-wider ${getCategoryStyle(item.category).color}`}>
+                    {item.category}
+                  </Text>
+                </View>
 
                 <View className="flex-row items-center justify-between">
                   <View className="flex-row items-center">

@@ -1,5 +1,6 @@
 import { Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { Image } from 'react-native';
 
 export default function TabLayout() {
   return (
@@ -29,7 +30,14 @@ export default function TabLayout() {
       <Tabs.Screen
         name="home"
         options={{
-          title: 'Lost Items',
+          headerTitle: () => (
+            <Image 
+              source={require('../../assets/images/logo.png')} 
+              style={{ width: 120, height: 40 }}
+              resizeMode="contain"
+            />
+          ),
+          tabBarLabel: 'Lost',
           tabBarIcon: ({ color }) => <Ionicons name="search" size={24} color={color} />,
         }}
       />

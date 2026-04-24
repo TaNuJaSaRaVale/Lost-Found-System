@@ -9,50 +9,55 @@ const db = admin.firestore();
 // Score weights: Category (+0.3), Keywords in description/title (+0.4), Location (+0.2), Date Logic (+0.1)
 function calculateMatchScore(lostItem, foundItem) {
   let score = 0;
+  const breakDown = {};
 
   // 1. Category Matching (Base weight: 0.3)
   if (lostItem.category.toLowerCase() === foundItem.category.toLowerCase()) {
     score += 0.3;
+    breakDown.category = 0.3;
   }
 
   // 2. Location Matching (Base weight: 0.2)
-  // Simple literal match for MVP, can be enhanced with geo-hashing later
   if (lostItem.location.toLowerCase().includes(foundItem.location.toLowerCase()) || 
       foundItem.location.toLowerCase().includes(lostItem.location.toLowerCase())) {
     score += 0.2;
+    breakDown.location = 0.2;
   }
 
-  // 3. Keyword Matching in Title and Description (Base weight: 0.4)
+  // 3. Keyword Matching with Substring support (Base weight: 0.4)
   const extractWords = (text) => text ? text.toLowerCase().match(/\b\w+\b/g) || [] : [];
-  const lostWords = new Set([...extractWords(lostItem.title), ...extractWords(lostItem.description)]);
-  const foundWords = new Set([...extractWords(foundItem.title), ...extractWords(foundItem.description)]);
+  const lostWords = [...extractWords(lostItem.title), ...extractWords(lostItem.description)];
+  const foundWords = [...extractWords(foundItem.title), ...extractWords(foundItem.description)];
 
-  let matchAmount = 0;
-  foundWords.forEach(word => {
-    if (lostWords.has(word) && word.length > 2) { // ignorable stop words like 'a', 'is' roughly skipped
-      matchAmount++;
-    }
+  let matchedKeywords = 0;
+  const uniqueFoundWords = new Set(foundWords);
+  
+  uniqueFoundWords.forEach(fWord => {
+    if (fWord.length <= 2) return; 
+    
+    // Check if finding word is inside any lost word or vice-versa (e.g. "phone" matches "iPhone")
+    const isFragmentMatch = lostWords.some(lWord => 
+       lWord === fWord || lWord.includes(fWord) || fWord.includes(lWord)
+    );
+
+    if (isFragmentMatch) matchedKeywords++;
   });
   
-  if (matchAmount > 0) {
-    // If they have 3 or more matching meaningful words, they get full 0.4 points.
-    // Otherwise fraction of it.
-    score += Math.min(0.4, (matchAmount / 3) * 0.4);
-  }
+  const kwScore = Math.min(0.4, (matchedKeywords / 3) * 0.4);
+  score += kwScore;
+  breakDown.keywords = kwScore;
 
   // 4. Date Logic (Base weight: 0.1)
-  // Found date should theoretically be >= Lost date. 
-  // If found within 7 days of being lost, award full 0.1
   const lostDate = new Date(lostItem.createdAt?.toDate?.() || lostItem.dateReported);
   const foundDate = new Date(foundItem.createdAt?.toDate?.() || foundItem.dateReported);
-  
-  const diffTime = Math.abs(foundDate - lostDate);
-  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
+  const diffDays = Math.ceil(Math.abs(foundDate - lostDate) / (1000 * 60 * 60 * 24)); 
   
   if (diffDays <= 7) {
     score += 0.1;
+    breakDown.date = 0.1;
   }
 
+  console.log(`[Matching Engine] Score: ${score.toFixed(2)} | Breakdown:`, breakDown);
   return score;
 }
 

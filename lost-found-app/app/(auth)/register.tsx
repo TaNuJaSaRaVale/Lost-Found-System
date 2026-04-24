@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, Alert, ActivityIndicator, ScrollView } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, Alert, ActivityIndicator, ScrollView, Image } from 'react-native';
 import { useRouter } from 'expo-router';
 import { createUserWithEmailAndPassword, updateProfile } from 'firebase/auth';
 import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
@@ -9,16 +9,16 @@ import { Ionicons } from '@expo/vector-icons';
 export default function RegisterScreen() {
   const router = useRouter();
   const [name, setName] = useState('');
+  const [studentClass, setStudentClass] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
-  const [googleLoading, setGoogleLoading] = useState(false);
 
   const handleRegister = async () => {
-    if (!name || !email || !password) {
-      Alert.alert('Error', 'Please fill in all required fields.');
+    if (!name || !studentClass || !email || !password) {
+      Alert.alert('Error', 'Please fill in all required fields (Name, Class, Email, password).');
       return;
     }
     
@@ -31,6 +31,7 @@ export default function RegisterScreen() {
 
       await setDoc(doc(db, 'users', user.uid), {
         name: name.trim(),
+        studentClass: studentClass.trim(),
         email: email.trim(),
         phone: phone.trim(),
         role: 'user',
@@ -54,9 +55,12 @@ export default function RegisterScreen() {
 
   return (
     <ScrollView className="flex-1 bg-background" contentContainerStyle={{ flexGrow: 1, justifyContent: 'center', padding: 24 }}>
-      <View className="items-center mb-8">
-        <Text className="text-4xl font-bold text-primary mb-2">Join Platform</Text>
-        <Text className="text-textLight text-lg text-center">Help keep the campus connected.</Text>
+      <View className="items-center mb-8 pt-10">
+        <Image 
+          source={require('../../assets/images/logo.png')} 
+          style={{ width: 140, height: 140 }}
+          resizeMode="contain"
+        />
       </View>
 
       <View className="bg-surface p-6 rounded-3xl shadow-sm border border-gray-100">
@@ -67,6 +71,13 @@ export default function RegisterScreen() {
           placeholder="Full Name"
           value={name}
           onChangeText={setName}
+        />
+
+        <TextInput
+          className="bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 mb-4 text-text text-base"
+          placeholder="Class (e.g. 2nd Year AIML)"
+          value={studentClass}
+          onChangeText={setStudentClass}
         />
 
         <TextInput
