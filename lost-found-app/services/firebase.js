@@ -4,11 +4,17 @@ import {
   getReactNativePersistence, 
   getAuth 
 } from "firebase/auth";
-import { 
-  initializeFirestore, 
-  getFirestore
-} from "firebase/firestore";
+import { initializeFirestore, getFirestore } from "firebase/firestore";
 import ReactNativeAsyncStorage from "@react-native-async-storage/async-storage";
+import { LogBox } from 'react-native';
+
+// Suppress expected offline and WebChannel transport warnings in development
+LogBox.ignoreLogs([
+  "Could not reach Cloud Firestore backend",
+  "WebChannelConnection RPC 'Listen' stream",
+  "Backend didn't respond within 10 seconds",
+  "Missing or insufficient permissions"
+]);
 
 // Firebase project configuration
 const firebaseConfig = {
@@ -48,10 +54,9 @@ try {
 let _db;
 try {
   _db = initializeFirestore(app, {
-    experimentalForceLongPolling: true,
-    useFetchStreams: false, // More stable for some mobile networks
+    experimentalAutoDetectLongPolling: true,
   });
-  console.log("📦 Firestore Initialized (Long Polling: ON)");
+  console.log("📦 Firestore Initialized (Auto Detect Long Polling)");
 } catch (e) {
   _db = getFirestore(app);
 }

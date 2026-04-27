@@ -38,7 +38,7 @@ export default function FoundItemsScreen() {
       setItems(fetched);
       setLoading(false);
     }, (error) => {
-      console.error(error);
+      console.log(error);
       setLoading(false);
     });
     return () => unsubscribe();
@@ -63,13 +63,13 @@ export default function FoundItemsScreen() {
 
 
   return (
-    <View className="flex-1 bg-background">
+    <View className="flex-1 bg-background dark:bg-background-dark">
       {/* Search Header */}
-      <View className="px-4 pt-4 pb-2 bg-background">
-        <View className="bg-surface border border-gray-100 rounded-2xl flex-row items-center px-4 py-1 shadow-sm">
+      <View className="px-4 pt-4 pb-2 bg-background dark:bg-background-dark">
+        <View className="bg-surface dark:bg-surface-dark border border-gray-100 dark:border-gray-800 rounded-2xl flex-row items-center px-4 py-1 shadow-sm">
           <Ionicons name="search" size={20} color="#94a3b8" />
           <TextInput
-            className="flex-1 py-3 ml-2 text-text text-base"
+            className="flex-1 py-3 ml-2 text-text dark:text-text-dark text-base"
             placeholder="Search found items..."
             value={searchQuery}
             onChangeText={setSearchQuery}
@@ -97,10 +97,10 @@ export default function FoundItemsScreen() {
                 key={status}
                 onPress={() => setStatusFilter(status)}
                 className={`mr-3 px-5 py-2 rounded-full border ${
-                  isActive ? 'bg-secondary border-secondary' : 'bg-surface border-gray-100'
+                  isActive ? 'bg-secondary border-secondary' : 'bg-surface dark:bg-surface-dark border-gray-100 dark:border-gray-800'
                 }`}
               >
-                <Text className={`font-bold capitalize ${isActive ? 'text-white' : 'text-textLight'}`}>
+                <Text className={`font-bold capitalize ${isActive ? 'text-white' : 'text-textLight dark:text-textLight-dark'}`}>
                   {status.replace('_', ' ')}
                 </Text>
               </TouchableOpacity>
@@ -116,8 +116,8 @@ export default function FoundItemsScreen() {
       ) : filteredItems.length === 0 ? (
         <View className="flex-1 justify-center items-center px-10">
           <Ionicons name="search-outline" size={64} color="#e2e8f0" />
-          <Text className="text-textLight font-bold text-lg mt-4">No matching items</Text>
-          <Text className="text-textLight text-center mt-2">Try a different search or filter category.</Text>
+          <Text className="text-textLight dark:text-textLight-dark font-bold text-lg mt-4">No matching items</Text>
+          <Text className="text-textLight dark:text-textLight-dark text-center mt-2">Try a different search or filter category.</Text>
         </View>
       ) : (
         <FlatList
@@ -127,14 +127,14 @@ export default function FoundItemsScreen() {
           renderItem={({ item }) => (
             <TouchableOpacity 
               onPress={() => router.push(`/item/${item.id}?type=found_items`)}
-              className="bg-surface p-4 rounded-3xl shadow-sm mb-4 border border-gray-100 flex-row items-center"
+              className="bg-surface dark:bg-surface-dark p-4 rounded-3xl shadow-sm mb-4 border border-gray-100 dark:border-gray-800 flex-row items-center"
             >
               <View className="flex-1">
                 <View className="flex-row items-center justify-between mb-1">
-                  <Text className="text-lg font-bold text-text flex-1 mr-2" numberOfLines={1}>
+                  <Text className="text-lg font-bold text-text dark:text-text-dark flex-1 mr-2" numberOfLines={1}>
                     {item.title}
                   </Text>
-                  <Text className="text-textLight text-[10px] uppercase font-bold tracking-widest">
+                  <Text className="text-textLight dark:text-textLight-dark text-[10px] uppercase font-bold tracking-widest">
                     {item.dateFound || 'Unknown'}
                   </Text>
                 </View>
@@ -148,7 +148,7 @@ export default function FoundItemsScreen() {
                 <View className="flex-row items-center justify-between">
                   <View className="flex-row items-center">
                     <Ionicons name="location-outline" size={12} color="#94a3b8" />
-                    <Text className="text-textLight text-xs ml-1 max-w-[150px]" numberOfLines={1}>
+                    <Text className="text-textLight dark:text-textLight-dark text-xs ml-1 max-w-[150px]" numberOfLines={1}>
                       {item.location}
                     </Text>
                   </View>

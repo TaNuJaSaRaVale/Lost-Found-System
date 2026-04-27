@@ -31,14 +31,11 @@ export default function ReportItemScreen() {
     if (!result.canceled) {
       setLoading(true);
       try {
-        // Compress and Convert to Base64 (Resize to 600px width for efficiency)
         const manipResult = await ImageManipulator.manipulateAsync(
           result.assets[0].uri,
           [{ resize: { width: 600 } }],
           { compress: 0.5, format: ImageManipulator.SaveFormat.JPEG, base64: true }
         );
-        
-        // Use the base64 string as the image URI
         const base64Image = `data:image/jpeg;base64,${manipResult.base64}`;
         setImage(base64Image);
       } catch (error) {
@@ -51,7 +48,7 @@ export default function ReportItemScreen() {
 
   const handleSubmit = async () => {
     if (!title || !category || !location || !dateTime) {
-      Alert.alert('Error', 'Please fill the required fields (Title, Category, Location, Date/Time).');
+      Alert.alert('Error', 'Please fill the required fields.');
       return;
     }
 
@@ -72,121 +69,137 @@ export default function ReportItemScreen() {
         createdAt: serverTimestamp()
       };
 
-
       if (type === 'lost') {
         itemData.reward = reward.trim();
-        // Backward compatibility for old components
         itemData.dateLost = dateTime.trim();
       } else {
         itemData.dateFound = dateTime.trim();
       }
       
       await addDoc(collection(db, collectionName), itemData);
-
-      Alert.alert('Success', `Your ${type} item has been reported successfully!`);
+      Alert.alert('Success 🎉', `Your ${type} report has been published.`);
       router.replace(`/(tabs)/${type === 'lost' ? 'home' : 'found'}`);
 
-    } catch (error) {
+    } catch (error: any) {
       Alert.alert('Error', error.message);
+    } finally {
       setLoading(false);
     }
   };
 
   return (
-    <ScrollView className="flex-1 bg-background p-6">
-      <TouchableOpacity onPress={() => router.back()} className="mb-6">
-        <Text className="text-primary font-bold">← Back</Text>
-      </TouchableOpacity>
+    <ScrollView className="flex-1 bg-background dark:bg-background-dark" showsVerticalScrollIndicator={false}>
+      <View className="p-8 pt-12">
+        <TouchableOpacity 
+          onPress={() => router.back()} 
+          className="bg-gray-100 dark:bg-gray-800 self-start p-3 rounded-2xl mb-8"
+        >
+          <Ionicons name="arrow-back" size={24} color="#6366F1" />
+        </TouchableOpacity>
 
-      <Text className="text-3xl font-bold text-text mb-6">
-        Report {type === 'lost' ? 'Lost' : 'Found'} Item
-      </Text>
+        <Text className="text-4xl font-extrabold text-text dark:text-text-dark mb-2">
+          New {type === 'lost' ? 'Lost' : 'Found'} Report
+        </Text>
+        <Text className="text-textLight dark:text-textLight-dark text-base mb-8">
+          Provide as much detail as possible to help the community.
+        </Text>
 
-      <View className="bg-surface p-6 rounded-3xl border border-gray-100 mb-8">
-        <Text className="text-text font-semibold mb-2">Item Name *</Text>
-        <TextInput 
-          className="bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 mb-4 text-text"
-          placeholder="e.g., Blue Hydroflask"
-          value={title}
-          onChangeText={setTitle}
-        />
-
-        <Text className="text-text font-semibold mb-2">Category *</Text>
-        <TextInput 
-          className="bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 mb-4 text-text"
-          placeholder="e.g., Electronics, Keys, Accessories"
-          value={category}
-          onChangeText={setCategory}
-        />
-
-        <Text className="text-text font-semibold mb-2">Location *</Text>
-        <TextInput 
-          className="bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 mb-4 text-text"
-          placeholder={type === 'lost' ? 'Where did you last see it?' : 'Where did you find it?'}
-          value={location}
-          onChangeText={setLocation}
-        />
-
-        <View className="flex-row justify-between mb-4">
-          <View className="flex-1 mr-2">
-            <Text className="text-text font-semibold mb-2">Date & Time *</Text>
-            <TextInput 
-              className="bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-text"
-              placeholder="e.g. 10:30 AM"
-              value={dateTime}
-              onChangeText={setDateTime}
-            />
-          </View>
+        <View className="bg-surface dark:bg-surface-dark p-8 rounded-[40px] shadow-2xl border border-gray-100 dark:border-gray-800 mb-20">
+          <Text className="text-xs font-bold text-textLight dark:text-textLight-dark uppercase tracking-widest mb-3">Core Information</Text>
           
-          {type === 'lost' && (
-            <View className="flex-1 ml-2">
-              <Text className="text-text font-semibold mb-2">Reward (Optional)</Text>
+          <TextInput 
+            className="bg-gray-50 dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-2xl px-5 py-4 mb-4 text-text dark:text-text-dark text-base font-medium"
+            placeholder="Item Title (e.g. Red Backpack)"
+            placeholderTextColor="#9CA3AF"
+            value={title}
+            onChangeText={setTitle}
+          />
+
+          <TextInput 
+            className="bg-gray-50 dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-2xl px-5 py-4 mb-4 text-text dark:text-text-dark text-base"
+            placeholder="Category (e.g. Wallet, Electronics)"
+            placeholderTextColor="#9CA3AF"
+            value={category}
+            onChangeText={setCategory}
+          />
+
+          <TextInput 
+            className="bg-gray-50 dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-2xl px-5 py-4 mb-6 text-text dark:text-text-dark text-base"
+            placeholder={type === 'lost' ? 'Last known location?' : 'Where was it found?'}
+            placeholderTextColor="#9CA3AF"
+            value={location}
+            onChangeText={setLocation}
+          />
+
+          <View className="flex-row justify-between mb-6">
+            <View className="flex-1 mr-2">
+              <Text className="text-xs font-bold text-textLight dark:text-textLight-dark uppercase tracking-widest mb-3">When</Text>
               <TextInput 
-                className="bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-text"
-                placeholder="e.g. $20 or Treat"
-                value={reward}
-                onChangeText={setReward}
+                className="bg-gray-50 dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-2xl px-5 py-4 text-text dark:text-text-dark text-base"
+                placeholder="Time/Date"
+                placeholderTextColor="#9CA3AF"
+                value={dateTime}
+                onChangeText={setDateTime}
               />
             </View>
-          )}
+            
+            {type === 'lost' && (
+              <View className="flex-1 ml-2">
+                <Text className="text-xs font-bold text-textLight dark:text-textLight-dark uppercase tracking-widest mb-3">Gratitude</Text>
+                <TextInput 
+                  className="bg-gray-50 dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-2xl px-5 py-4 text-text dark:text-text-dark text-base"
+                  placeholder="Reward?"
+                  placeholderTextColor="#9CA3AF"
+                  value={reward}
+                  onChangeText={setReward}
+                />
+              </View>
+            )}
+          </View>
+
+          <Text className="text-xs font-bold text-textLight dark:text-textLight-dark uppercase tracking-widest mb-3">Distinguishing Features</Text>
+          <TextInput 
+            className="bg-gray-50 dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-2xl px-5 py-4 mb-8 min-h-[140px] text-text dark:text-text-dark text-base"
+            placeholder="Describe unique marks, contents, or condition..."
+            placeholderTextColor="#9CA3AF"
+            value={description}
+            onChangeText={setDescription}
+            multiline
+            textAlignVertical="top"
+          />
+
+          <Text className="text-xs font-bold text-textLight dark:text-textLight-dark uppercase tracking-widest mb-3">Visual Evidence</Text>
+          <TouchableOpacity 
+            onPress={pickImage}
+            className="bg-gray-50 dark:bg-gray-900 border-2 border-dashed border-gray-200 dark:border-gray-800 rounded-[32px] h-56 mb-10 overflow-hidden items-center justify-center shadow-inner"
+          >
+            {image ? (
+              <Image source={{ uri: image }} className="w-full h-full" resizeMode="cover" />
+            ) : (
+              <View className="items-center">
+                <View className="bg-primary/10 p-5 rounded-full mb-3">
+                  <Ionicons name="camera" size={32} color="#6366F1" />
+                </View>
+                <Text className="text-textLight dark:text-textLight-dark font-bold">Pick a Clear Photo</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+
+          <TouchableOpacity 
+            className={`py-5 rounded-[24px] items-center flex-row justify-center shadow-2xl shadow-primary/40 ${type === 'lost' ? 'bg-primary' : 'bg-secondary'}`}
+            onPress={handleSubmit}
+            disabled={loading}
+          >
+            {loading ? (
+               <ActivityIndicator color="#fff" />
+            ) : (
+               <>
+                <Text className="text-white font-extrabold text-xl mr-3">Publish Report</Text>
+                <Ionicons name="rocket-outline" size={24} color="white" />
+               </>
+            )}
+          </TouchableOpacity>
         </View>
-
-        <Text className="text-text font-semibold mb-2">Description</Text>
-        <TextInput 
-          className="bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 mb-6 min-h-[100px] text-text"
-          placeholder="Any distinguishing features?"
-          value={description}
-          onChangeText={setDescription}
-          multiline
-          textAlignVertical="top"
-        />
-
-
-        <Text className="text-text font-semibold mb-2">Item Photo</Text>
-        <TouchableOpacity 
-          onPress={pickImage}
-          className="bg-gray-50 border-2 border-dashed border-gray-200 rounded-2xl h-48 mb-6 overflow-hidden items-center justify-center"
-        >
-          {image ? (
-            <Image source={{ uri: image }} className="w-full h-full" resizeMode="cover" />
-          ) : (
-            <View className="items-center">
-              <Ionicons name="camera" size={40} color="#94a3b8" />
-              <Text className="text-textLight mt-2">Tap to Select Photo</Text>
-            </View>
-          )}
-        </TouchableOpacity>
-        <TouchableOpacity 
-          className={`py-4 rounded-xl items-center flex-row justify-center ${type === 'lost' ? 'bg-primary' : 'bg-secondary'}`}
-          onPress={handleSubmit}
-          disabled={loading}
-        >
-          {loading ? (
-             <ActivityIndicator color="#fff" />
-          ) : (
-             <Text className="text-white font-bold text-lg">Submit Report</Text>
-          )}
-        </TouchableOpacity>
       </View>
     </ScrollView>
   );
