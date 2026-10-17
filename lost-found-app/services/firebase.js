@@ -4,7 +4,7 @@ import {
   getReactNativePersistence, 
   getAuth 
 } from "firebase/auth";
-import { initializeFirestore, getFirestore } from "firebase/firestore";
+import { initializeFirestore, getFirestore, doc, getDoc } from "firebase/firestore";
 import ReactNativeAsyncStorage from "@react-native-async-storage/async-storage";
 import { LogBox } from 'react-native';
 
@@ -31,7 +31,6 @@ let app;
 try {
   if (getApps().length === 0) {
     app = initializeApp(firebaseConfig);
-    console.log("🔥 Firebase Initialized successfully");
   } else {
     app = getApp();
   }
@@ -45,7 +44,6 @@ try {
   _auth = initializeAuth(app, {
     persistence: getReactNativePersistence(ReactNativeAsyncStorage)
   });
-  console.log("🔐 Auth Persistence initialized");
 } catch (e) {
   _auth = getAuth(app);
 }
@@ -56,7 +54,6 @@ try {
   _db = initializeFirestore(app, {
     experimentalAutoDetectLongPolling: true,
   });
-  console.log("📦 Firestore Initialized (Auto Detect Long Polling)");
 } catch (e) {
   _db = getFirestore(app);
 }

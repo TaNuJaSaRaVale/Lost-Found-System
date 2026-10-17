@@ -11,7 +11,9 @@ const CHARACTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
 const COLORS = ['#1F2937', '#4F46E5', '#047857', '#B91C1C', '#0369A1', '#4338CA', '#A21CAF'];
 
 export const VisualCaptcha: React.FC<CaptchaProps> = ({ onVerify, width }) => {
-  const containerWidth = width || Dimensions.get('window').width - 80;
+  // Measure the real container so the noise covers it exactly (no overflow on small screens).
+  const [measuredWidth, setMeasuredWidth] = useState(width || Dimensions.get('window').width - 100);
+  const containerWidth = width || measuredWidth;
   const [code, setCode] = useState('');
   const [inputCode, setInputCode] = useState('');
   const [verified, setVerified] = useState(false);
@@ -92,17 +94,22 @@ export const VisualCaptcha: React.FC<CaptchaProps> = ({ onVerify, width }) => {
   if (verified) {
     return (
       <View 
-        className="bg-green-100 dark:bg-green-900 border border-green-500 rounded-2xl overflow-hidden flex-row items-center justify-center p-4" 
-        style={{ width: containerWidth }}
+        className="bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-300 dark:border-emerald-500/40 rounded-2xl overflow-hidden flex-row items-center justify-center p-4"
       >
         <Ionicons name="checkmark-circle" size={24} color="#10B981" />
-        <Text className="text-green-800 dark:text-green-100 font-bold ml-2">Human Verified</Text>
+        <Text className="text-emerald-800 dark:text-emerald-200 font-bold ml-2">Verified</Text>
       </View>
     );
   }
 
   return (
-    <View style={{ width: containerWidth }}>
+    <View
+      style={{ width: '100%' }}
+      onLayout={e => {
+        const w = Math.round(e.nativeEvent.layout.width);
+        if (!width && w > 0 && Math.abs(w - measuredWidth) > 4) setMeasuredWidth(w);
+      }}
+    >
       <View className="mb-2">
         <Text className="text-sm text-textLight dark:text-textLight-dark mb-1 font-medium">Verify you are human</Text>
         <View 
@@ -149,7 +156,7 @@ export const VisualCaptcha: React.FC<CaptchaProps> = ({ onVerify, width }) => {
 
       <View className="flex-row">
         <TextInput
-          className={`flex-1 bg-gray-50 dark:bg-gray-900 border ${error ? 'border-red-500' : 'border-gray-200 dark:border-gray-700'} rounded-xl px-4 py-3 text-text dark:text-text-dark`}
+          className={`flex-1 bg-muted dark:bg-muted-dark border ${error ? 'border-danger' : 'border-line dark:border-line-dark'} rounded-xl px-4 py-3 text-text dark:text-text-dark`}
           placeholder="Enter the code..."
           placeholderTextColor="#9CA3AF"
           value={inputCode}
@@ -162,7 +169,7 @@ export const VisualCaptcha: React.FC<CaptchaProps> = ({ onVerify, width }) => {
           maxLength={5}
         />
         <TouchableOpacity 
-          className="bg-primary justify-center items-center px-5 ml-2 rounded-xl"
+          className="bg-primary dark:bg-primary-dark justify-center items-center px-5 ml-2 rounded-xl"
           onPress={handleVerify}
         >
           <Text className="text-white font-bold">Verify</Text>

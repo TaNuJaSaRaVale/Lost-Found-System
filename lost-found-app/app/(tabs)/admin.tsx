@@ -1,391 +1,306 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, Alert, TextInput, RefreshControl } from 'react-native';
 import { collection, getDocs, doc, updateDoc, deleteDoc } from 'firebase/firestore';
-import { db } from '../../services/firebase';
 import { Ionicons } from '@expo/vector-icons';
-import { useAuth } from '../../context/AuthContext';
 import { useRouter } from 'expo-router';
+import { db } from '../../services/firebase';
+import { useAuth } from '../../context/AuthContext';
+import { useColors } from '../../hooks/useTheme';
+import { deleteItemCascade } from '../../services/items';
+import { StatusBadge } from '../../components/ui';
+import { statusKind, timeAgo, ItemType } from '../../utils/format';
+
+type Tab = 'overview' | 'reports' | 'users' | 'items';
 
 export default function AdminDashboardScreen() {
   const { profile } = useAuth();
   const router = useRouter();
+  const colors = useColors();
 
-  const [activeTab, setActiveTab] = useState<'overview' | 'users' | 'items' | 'reports'>('overview');
+  const [tab, setTab] = useState<Tab>('overview');
   const [loading, setLoading] = useState(true);
-  
+  const [refreshing, setRefreshing] = useState(false);
   const [users, setUsers] = useState<any[]>([]);
   const [items, setItems] = useState<any[]>([]);
   const [reports, setReports] = useState<any[]>([]);
+  const [search, setSearch] = useState('');
 
-  // Analytics
-  const [stats, setStats] = useState({ totalUsers: 0, totalItems: 0, resolvedItems: 0 });
-
-  useEffect(() => {
-    if (profile?.role !== 'admin') {
-      router.replace('/(tabs)/home'); // Kick out if not admin
-      return;
-    }
-    fetchData();
-  }, [profile]);
-
-  const fetchData = async () => {
-    setLoading(true);
+  const fetchData = useCallback(async () => {
     try {
-      // Fetch Users
-      const usersSnap = await getDocs(collection(db, 'users'));
-      const fetchedUsers = usersSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setUsers(fetchedUsers);
-
-      // Fetch Items (Lost and Found)
-      const lostSnap = await getDocs(collection(db, 'lost_items'));
-      const foundSnap = await getDocs(collection(db, 'found_items'));
-      const fetchedLost = lostSnap.docs.map(doc => ({ id: doc.id, type: 'lost', ...doc.data() }));
-      const fetchedFound = foundSnap.docs.map(doc => ({ id: doc.id, type: 'found', ...doc.data() }));
-      const allItems = [...fetchedLost, ...fetchedFound].sort((a,b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
-      setItems(allItems);
-
-      // Fetch Reports
-      const reportsSnap = await getDocs(collection(db, 'user_reports'));
-      const fetchedReports = reportsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setReports(fetchedReports);
-
-      // Calc stats
-      setStats({
-        totalUsers: fetchedUsers.length,
-        totalItems: allItems.length,
-        resolvedItems: allItems.filter(i => i.status === 'resolved' || i.status === 'returned' || i.status === 'claimed').length
-      });
-
-    } catch (error) {
-      console.error("Error fetching admin data", error);
-      Alert.alert("Error", "Could not fetch dashboard data.");
+      const [usersSnap, lostSnap, foundSnap, reportsSnap] = await Promise.all([
+        getDocs(collection(db, 'users')),
+        getDocs(collection(db, 'lost_items')),
+        getDocs(collection(db, 'found_items')),
+        getDocs(collection(db, 'user_reports')),
+      ]);
+      setUsers(usersSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+      setItems([
+        ...lostSnap.docs.map(d => ({ id: d.id, _type: 'lost_items', ...d.data() })),
+        ...foundSnap.docs.map(d => ({ id: d.id, _type: 'found_items', ...d.data() })),
+      ].sort((a: any, b: any) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)));
+      setReports(reportsSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+        .sort((a: any, b: any) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)));
+    } catch (error: any) {
+      Alert.alert('Could not load dashboard', error?.code === 'permission-denied'
+        ? 'Your account lacks admin permissions on the server. Deploy the latest firestore.rules.'
+        : error.message);
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
-  };
+  }, []);
 
-  const toggleUserStatus = async (userId: string, currentStatus: string) => {
-    const newStatus = currentStatus === 'active' ? 'blocked' : 'active';
+  useEffect(() => {
+    if (profile && profile.role !== 'admin') {
+      router.replace('/(tabs)/home');
+      return;
+    }
+    if (profile) fetchData();
+  }, [profile?.role]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const stats = useMemo(() => {
+    const returned = items.filter(i => statusKind(i.status) === 'returned').length;
+    return {
+      users: users.length,
+      blocked: users.filter(u => u.status === 'blocked').length,
+      lostOpen: items.filter(i => i._type === 'lost_items' && statusKind(i.status) === 'open').length,
+      foundOpen: items.filter(i => i._type === 'found_items' && statusKind(i.status) === 'open').length,
+      returned,
+      rate: items.length ? Math.round((returned / items.length) * 100) : 0,
+      reports: reports.length,
+    };
+  }, [users, items, reports]);
+
+  const updateUser = async (userId: string, data: Record<string, any>, success?: string) => {
     try {
-      await updateDoc(doc(db, 'users', userId), { status: newStatus });
-      setUsers(users.map(u => u.id === userId ? { ...u, status: newStatus } : u));
-    } catch (error) {
-      Alert.alert('Error', 'Could not update user status.');
+      await updateDoc(doc(db, 'users', userId), data);
+      setUsers(prev => prev.map(u => (u.id === userId ? { ...u, ...data } : u)));
+      if (success) Alert.alert('Done', success);
+    } catch (e: any) {
+      Alert.alert('Error', e.message);
     }
   };
 
-  const issueWarning = async (userId: string) => {
+  const confirm = (title: string, message: string, action: () => void, destructive = false) =>
+    Alert.alert(title, message, [{ text: 'Cancel', style: 'cancel' }, { text: 'Confirm', style: destructive ? 'destructive' : 'default', onPress: action }]);
+
+  const toggleBlock = (u: any) => {
+    const blocking = u.status !== 'blocked';
+    confirm(blocking ? 'Suspend user?' : 'Restore user?',
+      blocking ? `${u.name} will be signed out and unable to use the app.` : `${u.name} will regain access.`,
+      () => updateUser(u.id, { status: blocking ? 'blocked' : 'active' }), blocking);
+  };
+
+  const warnUser = (userId: string) => {
+    const u = users.find(x => x.id === userId);
+    confirm('Send warning?', `${u?.name || 'This user'} will see a warning banner.`,
+      () => updateUser(userId, { warnings: (u?.warnings || 0) + 1, hasPendingWarning: true }, 'Warning sent.'));
+  };
+
+  const setRole = (u: any, role: 'admin' | 'user') =>
+    confirm(role === 'admin' ? 'Make admin?' : 'Remove admin?',
+      role === 'admin' ? `${u.name} will get full moderation access.` : `${u.name} will become a standard user.`,
+      () => updateUser(u.id, { role }), role === 'user');
+
+  const removeItem = (item: any) =>
+    confirm('Delete this post?', `"${item.title}" and its claims will be removed.`, async () => {
+      try {
+        await deleteItemCascade(item._type as ItemType, item.id);
+        setItems(prev => prev.filter(i => i.id !== item.id));
+      } catch (e: any) {
+        Alert.alert('Error', e.message);
+      }
+    }, true);
+
+  const dismissReport = async (reportId: string) => {
     try {
-      const userToWarn = users.find(u => u.id === userId);
-      const warnings = (userToWarn?.warnings || 0) + 1;
-      await updateDoc(doc(db, 'users', userId), { warnings, hasPendingWarning: true });
-      setUsers(users.map(u => u.id === userId ? { ...u, warnings, hasPendingWarning: true } : u));
-      Alert.alert("Success", "User has been issued a warning.");
-    } catch (error) {
-      Alert.alert("Error", "Could not issue warning.");
+      await deleteDoc(doc(db, 'user_reports', reportId));
+      setReports(prev => prev.filter(r => r.id !== reportId));
+    } catch (e: any) {
+      Alert.alert('Error', e.message);
     }
-  };
-
-  const promoteUserToAdmin = async (userId: string) => {
-    Alert.alert(
-      "Promote User",
-      "Are you sure you want to promote this user to Admin? They will have full access to this dashboard.",
-      [
-        { text: "Cancel", style: "cancel" },
-        { 
-          text: "Promote", 
-          onPress: async () => {
-            try {
-              await updateDoc(doc(db, 'users', userId), { role: 'admin' });
-              setUsers(users.map(u => u.id === userId ? { ...u, role: 'admin' } : u));
-              Alert.alert("Success", "User promoted to Admin.");
-            } catch (error) {
-              Alert.alert('Error', 'Could not promote user.');
-            }
-          }
-        }
-      ]
-    );
-  };
-
-  const demoteUserFromAdmin = async (userId: string) => {
-    Alert.alert(
-      "Demote User",
-      "Are you sure you want to demote this user from Admin to Standard User?",
-      [
-        { text: "Cancel", style: "cancel" },
-        { 
-          text: "Demote", 
-          style: "destructive",
-          onPress: async () => {
-            try {
-              await updateDoc(doc(db, 'users', userId), { role: 'user' });
-              setUsers(users.map(u => u.id === userId ? { ...u, role: 'user' } : u));
-              Alert.alert("Success", "User demoted to Standard User.");
-            } catch (error) {
-              Alert.alert('Error', 'Could not demote user.');
-            }
-          }
-        }
-      ]
-    );
-  };
-
-  const deleteItem = async (itemId: string, itemType: string) => {
-    Alert.alert(
-      "Delete Item",
-      "Are you sure you want to delete this item? This action cannot be undone.",
-      [
-        { text: "Cancel", style: "cancel" },
-        { 
-          text: "Delete", 
-          style: "destructive",
-          onPress: async () => {
-            try {
-              await deleteDoc(doc(db, itemType === 'lost' ? 'lost_items' : 'found_items', itemId));
-              setItems(items.filter(i => i.id !== itemId));
-            } catch (error) {
-              Alert.alert('Error', 'Could not delete item.');
-            }
-          }
-        }
-      ]
-    );
   };
 
   if (loading) {
     return (
       <View className="flex-1 justify-center items-center bg-background dark:bg-background-dark">
-        <ActivityIndicator size="large" color="#6366F1" />
+        <ActivityIndicator size="large" color={colors.primary} />
       </View>
     );
   }
 
-  const renderTabHeader = () => (
-    <View className="border-b border-gray-200 dark:border-gray-800">
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerClassName="flex-row px-4 pt-4 pb-2">
-        <TouchableOpacity 
-          className={`mr-6 pb-2 ${activeTab === 'overview' ? 'border-b-2 border-primary' : ''}`}
-          onPress={() => setActiveTab('overview')}
-        >
-          <Text className={`font-bold ${activeTab === 'overview' ? 'text-primary' : 'text-textLight dark:text-textLight-dark'}`}>Overview</Text>
-        </TouchableOpacity>
-        <TouchableOpacity 
-          className={`mr-6 pb-2 ${activeTab === 'users' ? 'border-b-2 border-primary' : ''}`}
-          onPress={() => setActiveTab('users')}
-        >
-          <Text className={`font-bold ${activeTab === 'users' ? 'text-primary' : 'text-textLight dark:text-textLight-dark'}`}>Users</Text>
-        </TouchableOpacity>
-        <TouchableOpacity 
-          className={`mr-6 pb-2 ${activeTab === 'reports' ? 'border-b-2 border-primary' : ''}`}
-          onPress={() => setActiveTab('reports')}
-        >
-          <Text className={`font-bold ${activeTab === 'reports' ? 'text-primary' : 'text-textLight dark:text-textLight-dark'}`}>Reports</Text>
-        </TouchableOpacity>
-        <TouchableOpacity 
-          className={`pr-8 pb-2 ${activeTab === 'items' ? 'border-b-2 border-primary' : ''}`}
-          onPress={() => setActiveTab('items')}
-        >
-          <Text className={`font-bold ${activeTab === 'items' ? 'text-primary' : 'text-textLight dark:text-textLight-dark'}`}>Items Moderation</Text>
-        </TouchableOpacity>
-      </ScrollView>
-    </View>
-  );
+  const term = search.trim().toLowerCase();
+  const visibleUsers = users.filter(u => !term || `${u.name} ${u.email} ${u.prn || ''}`.toLowerCase().includes(term));
+  const visibleItems = items.filter(i => !term || `${i.title} ${i.location} ${i.userName || ''}`.toLowerCase().includes(term));
+
+  const TABS: { id: Tab; label: string; count?: number }[] = [
+    { id: 'overview', label: 'Overview' },
+    { id: 'reports', label: 'Reports', count: reports.length },
+    { id: 'users', label: 'Users' },
+    { id: 'items', label: 'Posts' },
+  ];
 
   return (
     <View className="flex-1 bg-background dark:bg-background-dark">
-      {renderTabHeader()}
+      <View className="flex-row bg-surface dark:bg-surface-dark border-b border-line dark:border-line-dark px-2">
+        {TABS.map(t => (
+          <TouchableOpacity key={t.id} onPress={() => setTab(t.id)}
+            className={`flex-1 py-3 items-center border-b-2 ${tab === t.id ? 'border-primary dark:border-primary-dark' : 'border-transparent'}`}>
+            <Text className={`font-bold text-sm ${tab === t.id ? 'text-primary dark:text-primary-dark' : 'text-textLight dark:text-textLight-dark'}`}>
+              {t.label}{t.count ? ` (${t.count})` : ''}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
 
-      <ScrollView className="flex-1 p-4">
-        
-        {/* OVERVIEW TAB */}
-        {activeTab === 'overview' && (
-          <View className="space-y-4 gap-4">
-            <View className="bg-surface dark:bg-surface-dark p-6 rounded-2xl shadow-sm flex-row items-center border border-gray-100 dark:border-gray-800">
-               <View className="bg-primary/20 p-4 rounded-full mr-4">
-                 <Ionicons name="people" size={32} color="#4F46E5" />
-               </View>
-               <View>
-                 <Text className="text-textLight dark:text-textLight-dark mb-1">Total Users</Text>
-                 <Text className="text-text dark:text-text-dark text-3xl font-extrabold">{stats.totalUsers}</Text>
-               </View>
-            </View>
+      <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); fetchData(); }} tintColor={colors.primary} />}>
 
-            <View className="bg-surface dark:bg-surface-dark p-6 rounded-2xl shadow-sm flex-row items-center border border-gray-100 dark:border-gray-800">
-               <View className="bg-amber-500/20 p-4 rounded-full mr-4">
-                 <Ionicons name="albums" size={32} color="#F59E0B" />
-               </View>
-               <View>
-                 <Text className="text-textLight dark:text-textLight-dark mb-1">Total Items Posted</Text>
-                 <Text className="text-text dark:text-text-dark text-3xl font-extrabold">{stats.totalItems}</Text>
-               </View>
-            </View>
-
-            <View className="bg-surface dark:bg-surface-dark p-6 rounded-2xl shadow-sm flex-row items-center border border-gray-100 dark:border-gray-800">
-               <View className="bg-emerald-500/20 p-4 rounded-full mr-4">
-                 <Ionicons name="checkmark-done-circle" size={32} color="#10B981" />
-               </View>
-               <View>
-                 <Text className="text-textLight dark:text-textLight-dark mb-1">Resolved Items</Text>
-                 <Text className="text-text dark:text-text-dark text-3xl font-extrabold">{stats.resolvedItems}</Text>
-               </View>
-            </View>
-
-            <TouchableOpacity 
-              className="bg-primary p-4 rounded-xl flex-row justify-center items-center mt-4"
-              onPress={fetchData}
-            >
-              <Ionicons name="refresh" size={20} color="white" />
-              <Text className="text-white font-bold ml-2">Refresh Data</Text>
-            </TouchableOpacity>
+        {(tab === 'users' || tab === 'items') && (
+          <View className="bg-surface dark:bg-surface-dark border border-line dark:border-line-dark rounded-2xl flex-row items-center px-4 mb-3">
+            <Ionicons name="search" size={18} color={colors.textLight} />
+            <TextInput className="flex-1 py-3 ml-2 text-text dark:text-text-dark" placeholder={tab === 'users' ? 'Search name, email, PRN' : 'Search posts'}
+              placeholderTextColor={colors.placeholder} value={search} onChangeText={setSearch} />
           </View>
         )}
 
-        {/* USERS TAB */}
-        {activeTab === 'users' && (
-          <View className="space-y-3 pb-10 gap-3">
-            {users.map(u => (
-              <View key={u.id} className="bg-surface dark:bg-surface-dark p-4 rounded-xl border border-gray-100 dark:border-gray-800 flex-row justify-between items-center">
-                <View className="flex-1 mr-2">
-                  <Text className="text-text dark:text-text-dark font-bold text-lg">{u.name}</Text>
+        {tab === 'overview' && (
+          <View className="flex-row flex-wrap -mx-1.5">
+            <StatTile icon="people" label="Users" value={stats.users} sub={`${stats.blocked} suspended`} color={colors.primary} />
+            <StatTile icon="flag" label="Open reports" value={stats.reports} sub="Need review" color={colors.danger} />
+            <StatTile icon="search" label="Open lost" value={stats.lostOpen} color={colors.primary} />
+            <StatTile icon="sparkles" label="Open found" value={stats.foundOpen} color={colors.secondary} />
+            <StatTile icon="checkmark-done-circle" label="Returned" value={stats.returned} sub={`${stats.rate}% of all posts`} color={colors.secondary} />
+            <StatTile icon="albums" label="All posts" value={items.length} color={colors.accent} />
+          </View>
+        )}
+
+        {tab === 'reports' && (reports.length === 0 ? (
+          <Text className="text-textLight dark:text-textLight-dark text-center mt-10">No reports to review. 🎉</Text>
+        ) : reports.map(r => {
+          const reported = users.find(u => u.id === r.reportedUserId);
+          const reporter = users.find(u => u.id === r.reportedBy);
+          return (
+            <View key={r.id} className="bg-surface dark:bg-surface-dark p-4 rounded-2xl border border-line dark:border-line-dark mb-3">
+              <View className="flex-row justify-between items-start mb-2">
+                <View className="flex-1">
+                  <Text className="text-text dark:text-text-dark font-bold">{reported?.name || 'Unknown user'}</Text>
+                  <Text className="text-textLight dark:text-textLight-dark text-xs">
+                    Reported by {reporter?.name || 'someone'} · {timeAgo(r.createdAt)}
+                  </Text>
+                </View>
+                {reported?.status === 'blocked' && (
+                  <Text className="text-[10px] font-bold text-danger uppercase">Suspended</Text>
+                )}
+              </View>
+              {!!r.itemTitle && (
+                <TouchableOpacity onPress={() => router.push({ pathname: '/item/[id]', params: { id: r.itemId, type: r.itemType || 'found_items' } })}>
+                  <Text className="text-primary dark:text-primary-dark text-sm mb-2">Post: {r.itemTitle} ›</Text>
+                </TouchableOpacity>
+              )}
+              <View className="bg-rose-50 dark:bg-rose-500/10 p-3 rounded-xl mb-3">
+                <Text className="text-rose-800 dark:text-rose-200">{r.reason}</Text>
+              </View>
+              <View className="flex-row gap-2">
+                <SmallButton label="Dismiss" onPress={() => dismissReport(r.id)} />
+                <SmallButton label="Warn" tone="amber" onPress={() => warnUser(r.reportedUserId)} />
+                {reported && reported.id !== profile?.uid && (
+                  <SmallButton label={reported.status === 'blocked' ? 'Restore' : 'Suspend'} tone="red" onPress={() => toggleBlock(reported)} />
+                )}
+              </View>
+            </View>
+          );
+        }))}
+
+        {tab === 'users' && visibleUsers.map(u => {
+          const isSelf = u.id === profile?.uid;
+          return (
+            <View key={u.id} className="bg-surface dark:bg-surface-dark p-4 rounded-2xl border border-line dark:border-line-dark mb-3">
+              <View className="flex-row items-center">
+                <View className="flex-1">
+                  <Text className="text-text dark:text-text-dark font-bold">{u.name || 'No name'}{isSelf ? ' (you)' : ''}</Text>
                   <Text className="text-textLight dark:text-textLight-dark text-xs">{u.email}</Text>
-                  <View className="flex-row items-center mt-1">
-                    <Text className="text-xs text-textLight dark:text-textLight-dark mr-2">Role: <Text className={u.role==='admin'?'text-primary font-bold':''}>{u.role}</Text></Text>
-                    <Text className={`mr-2 text-xs font-bold ${u.status === 'blocked' ? 'text-red-500' : 'text-emerald-500'}`}>{u.status || 'active'}</Text>
-                    {u.warnings > 0 && <Text className="text-xs text-amber-500 font-bold">Warnings: {u.warnings}</Text>}
-                  </View>
-                </View>
-                
-                <View className="flex-row items-center gap-2">
-                  {u.role === 'admin' && u.id !== profile?.uid && (
-                    <TouchableOpacity 
-                      onPress={() => {
-                         const participants = [profile?.uid, u.id].sort();
-                         router.push(`/chat/admin_${participants[0]}_${participants[1]}`);
-                      }}
-                      className="bg-primary/10 p-2 rounded-lg border border-primary/30"
-                    >
-                      <Ionicons name="chatbubble-ellipses" size={20} color="#4F46E5" />
-                    </TouchableOpacity>
-                  )}
-                  {u.role !== 'admin' && (
-                    <TouchableOpacity 
-                      onPress={() => promoteUserToAdmin(u.id)}
-                      className="bg-primary/10 p-2 rounded-lg border border-primary/30"
-                    >
-                      <Ionicons name="shield-checkmark" size={20} color="#4F46E5" />
-                    </TouchableOpacity>
-                  )}
-                  {u.role === 'admin' && u.id !== profile?.uid && (
-                    <TouchableOpacity 
-                      onPress={() => demoteUserFromAdmin(u.id)}
-                      className="bg-amber-100 p-2 rounded-lg border border-amber-300"
-                    >
-                      <Ionicons name="shield-half" size={20} color="#F59E0B" />
-                    </TouchableOpacity>
-                  )}
-                  {u.id !== profile?.uid && ( // Don't block self
-                    <TouchableOpacity 
-                      onPress={() => toggleUserStatus(u.id, u.status || 'active')}
-                      className={`p-2 rounded-lg ${u.status === 'active' || !u.status ? 'bg-red-100 border-red-200' : 'bg-emerald-100 border-emerald-200'} border`}
-                    >
-                      <Ionicons name={u.status === 'active' || !u.status ? 'ban' : 'checkmark-circle'} size={20} color={u.status === 'active' || !u.status ? '#EF4444' : '#10B981'} />
-                    </TouchableOpacity>
-                  )}
+                  <Text className="text-xs mt-1">
+                    <Text className={u.role === 'admin' ? 'text-amber-600 font-bold' : 'text-textLight dark:text-textLight-dark'}>{u.role}</Text>
+                    <Text className="text-textLight dark:text-textLight-dark"> · </Text>
+                    <Text className={u.status === 'blocked' ? 'text-danger font-bold' : 'text-secondary'}>{u.status || 'active'}</Text>
+                    {u.warnings > 0 ? <Text className="text-amber-600"> · {u.warnings} warning(s)</Text> : null}
+                  </Text>
                 </View>
               </View>
-            ))}
-          </View>
-        )}
-
-        {/* REPORTS TAB */}
-        {activeTab === 'reports' && (
-          <View className="space-y-3 pb-10 gap-3">
-            {reports.map(report => {
-              const reportedUser = users.find(u => u.id === report.reportedUserId);
-              const reporterUser = users.find(u => u.id === report.reportedBy);
-              
-              return (
-                <View key={report.id} className="bg-surface dark:bg-surface-dark p-4 rounded-xl border border-red-100 dark:border-red-900/30 flex-col">
-                  <View className="flex-row justify-between items-start mb-2">
-                    <View className="flex-shrink">
-                      <Text className="text-text dark:text-text-dark font-bold text-base mb-1 cursor-text">Reported User: <Text className="text-red-500">{reportedUser?.name || report.reportedUserId}</Text></Text>
-                      <Text className="text-textLight dark:text-textLight-dark text-xs mb-1 cursor-text">Reported By: {reporterUser?.name || report.reportedBy}</Text>
-                      <Text className="text-textLight dark:text-textLight-dark text-[10px]">{new Date(report.createdAt?.seconds * 1000 || Date.now()).toLocaleDateString()}</Text>
-                    </View>
-                    {reportedUser?.status === 'blocked' ? (
-                      <View className="bg-red-500/10 px-2 py-1 rounded-md border border-red-500/20">
-                        <Text className="text-[10px] font-bold text-red-500 uppercase">Suspended</Text>
-                      </View>
-                    ) : (
-                      <View className="bg-emerald-500/10 px-2 py-1 rounded-md border border-emerald-500/20">
-                        <Text className="text-[10px] font-bold text-emerald-500 uppercase">Active</Text>
-                      </View>
-                    )}
-                  </View>
-                  
-                  <View className="bg-red-50 dark:bg-red-900/10 p-3 rounded-lg mb-4">
-                    <Text className="text-red-800 dark:text-red-400 font-medium">Reason: {report.reason}</Text>
-                  </View>
-
-                  <View className="flex-row justify-end space-x-2 gap-2 mt-auto border-t border-gray-100 dark:border-gray-800 pt-3">
-                    <TouchableOpacity 
-                      onPress={() => issueWarning(report.reportedUserId)}
-                      className="bg-amber-100 dark:bg-amber-900/30 px-4 py-2 rounded-lg border border-amber-200 dark:border-amber-900/50"
-                    >
-                      <Text className="text-amber-700 dark:text-amber-400 font-bold text-xs uppercase">Send Warning</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity 
-                      onPress={() => toggleUserStatus(report.reportedUserId, reportedUser?.status || 'active')}
-                      className={`px-4 py-2 rounded-lg border ${reportedUser?.status === 'blocked' ? 'bg-emerald-100 dark:bg-emerald-900/30 border-emerald-200 dark:border-emerald-900/50' : 'bg-red-100 dark:bg-red-900/30 border-red-200 dark:border-red-900/50'}`}
-                    >
-                      <Text className={`font-bold text-xs uppercase ${reportedUser?.status === 'blocked' ? 'text-emerald-700 dark:text-emerald-400' : 'text-red-700 dark:text-red-400'}`}>
-                        {reportedUser?.status === 'blocked' ? 'Unsuspend' : 'Suspend'}
-                      </Text>
-                    </TouchableOpacity>
-                  </View>
+              {!isSelf && (
+                <View className="flex-row gap-2 mt-3">
+                  {u.role === 'admin' ? (
+                    <>
+                      <SmallButton label="Message" onPress={() => {
+                        const [a, b] = [profile!.uid, u.id].sort();
+                        router.push(`/chat/admin_${a}_${b}`);
+                      }} />
+                      <SmallButton label="Remove admin" tone="amber" onPress={() => setRole(u, 'user')} />
+                    </>
+                  ) : (
+                    <SmallButton label="Make admin" onPress={() => setRole(u, 'admin')} />
+                  )}
+                  <SmallButton label={u.status === 'blocked' ? 'Restore' : 'Suspend'} tone="red" onPress={() => toggleBlock(u)} />
                 </View>
-              );
-            })}
-            {reports.length === 0 && (
-              <Text className="text-textLight dark:text-textLight-dark text-center mt-10">No reports to review.</Text>
-            )}
-          </View>
-        )}
+              )}
+            </View>
+          );
+        })}
 
-        {/* ITEMS TAB */}
-        {activeTab === 'items' && (
-          <View className="space-y-3 pb-10 gap-3">
-            {items.map(item => (
-              <View key={item.id} className="bg-surface dark:bg-surface-dark p-4 rounded-xl border border-gray-100 dark:border-gray-800 flex-row justify-between items-center">
-                <View className="flex-1 mr-2">
-                  <View className="flex-row items-center mb-1">
-                    <Text className={`text-xs font-bold px-2 py-0.5 rounded-md text-white mr-2 ${item.type === 'lost' ? 'bg-rose-500' : 'bg-emerald-500'}`}>
-                      {item.type.toUpperCase()}
-                    </Text>
-                    <Text className="text-xs text-textLight dark:text-textLight-dark ml-auto">{new Date(item.createdAt?.seconds * 1000 || Date.now()).toLocaleDateString()}</Text>
-                  </View>
-                  <Text className="text-text dark:text-text-dark font-bold text-base" numberOfLines={1}>{item.title}</Text>
-                  <Text className="text-textLight dark:text-textLight-dark text-xs mt-1" numberOfLines={2}>{item.description}</Text>
-                </View>
-
-                <View className="flex-col gap-2">
-                  <TouchableOpacity 
-                    onPress={() => deleteItem(item.id, item.type)}
-                    className="bg-red-50 dark:bg-red-900/30 p-2 rounded-lg border border-red-200 dark:border-red-900"
-                  >
-                    <Ionicons name="trash" size={20} color="#EF4444" />
-                  </TouchableOpacity>
-                </View>
+        {tab === 'items' && visibleItems.map(item => (
+          <TouchableOpacity key={item.id} onPress={() => router.push({ pathname: '/item/[id]', params: { id: item.id, type: item._type } })}
+            className="bg-surface dark:bg-surface-dark p-4 rounded-2xl border border-line dark:border-line-dark mb-3 flex-row items-center">
+            <View className="flex-1 mr-2">
+              <View className="flex-row items-center gap-2 mb-1">
+                <Text className={`text-[10px] font-extrabold uppercase ${item._type === 'lost_items' ? 'text-primary dark:text-primary-dark' : 'text-secondary dark:text-secondary-dark'}`}>
+                  {item._type === 'lost_items' ? 'Lost' : 'Found'}
+                </Text>
+                <StatusBadge status={item.status} />
+                <Text className="text-[11px] text-textLight dark:text-textLight-dark ml-auto">{timeAgo(item.createdAt)}</Text>
               </View>
-            ))}
-            {items.length === 0 && (
-              <Text className="text-textLight dark:text-textLight-dark text-center mt-10">No items available.</Text>
-            )}
-          </View>
-        )}
-
+              <Text className="text-text dark:text-text-dark font-bold" numberOfLines={1}>{item.title}</Text>
+              <Text className="text-textLight dark:text-textLight-dark text-xs" numberOfLines={1}>
+                {item.userName || 'Unknown'} · {item.location}
+              </Text>
+            </View>
+            <TouchableOpacity onPress={() => removeItem(item)} className="bg-rose-50 dark:bg-rose-500/10 p-2.5 rounded-xl" hitSlop={6}>
+              <Ionicons name="trash-outline" size={18} color={colors.danger} />
+            </TouchableOpacity>
+          </TouchableOpacity>
+        ))}
       </ScrollView>
     </View>
+  );
+}
+
+function StatTile({ icon, label, value, sub, color }: { icon: any; label: string; value: number; sub?: string; color: string }) {
+  return (
+    <View className="w-1/2 p-1.5">
+      <View className="bg-surface dark:bg-surface-dark p-4 rounded-2xl border border-line dark:border-line-dark">
+        <Ionicons name={icon} size={22} color={color} />
+        <Text className="text-2xl font-extrabold text-text dark:text-text-dark mt-2">{value}</Text>
+        <Text className="text-textLight dark:text-textLight-dark text-xs font-semibold">{label}</Text>
+        {sub ? <Text className="text-textLight dark:text-textLight-dark text-[11px] mt-0.5">{sub}</Text> : null}
+      </View>
+    </View>
+  );
+}
+
+function SmallButton({ label, onPress, tone = 'default' }: { label: string; onPress: () => void; tone?: 'default' | 'amber' | 'red' }) {
+  const cls = {
+    default: 'bg-muted dark:bg-muted-dark border-line dark:border-line-dark',
+    amber: 'bg-amber-50 dark:bg-amber-500/10 border-amber-200 dark:border-amber-500/30',
+    red: 'bg-rose-50 dark:bg-rose-500/10 border-rose-200 dark:border-rose-500/30',
+  }[tone];
+  const text = {
+    default: 'text-text dark:text-text-dark',
+    amber: 'text-amber-700 dark:text-amber-300',
+    red: 'text-rose-700 dark:text-rose-300',
+  }[tone];
+  return (
+    <TouchableOpacity onPress={onPress} className={`px-3 py-2 rounded-xl border ${cls}`}>
+      <Text className={`text-xs font-bold ${text}`}>{label}</Text>
+    </TouchableOpacity>
   );
 }

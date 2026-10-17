@@ -2,70 +2,72 @@ import * as Device from 'expo-device';
 import * as Notifications from 'expo-notifications';
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
-import { doc, updateDoc } from 'firebase/firestore';
+import { doc, setDoc, deleteField } from 'firebase/firestore';
 import { db, auth } from './firebase';
 
-export async function registerForPushNotificationsAsync() {
-  let token;
+// Show notifications as banners even when the app is in the foreground.
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowBanner: true,
+    shouldShowList: true,
+    shouldPlaySound: true,
+    shouldSetBadge: false,
+  }),
+});
+
+export async function registerForPushNotificationsAsync({ prompt = true } = {}) {
+  if (Platform.OS === 'web') return null;
 
   if (Platform.OS === 'android') {
-    Notifications.setNotificationChannelAsync('default', {
-      name: 'default',
-      importance: Notifications.AndroidImportance.MAX,
+    await Notifications.setNotificationChannelAsync('default', {
+      name: 'Updates',
+      importance: Notifications.AndroidImportance.HIGH,
       vibrationPattern: [0, 250, 250, 250],
-      lightColor: '#FF231F7C',
+      lightColor: '#4F46E5',
     });
   }
 
-  // Handle the SDK 53+ restriction where Expo Go cannot get push tokens on Android
-  if (Constants.appOwnership === 'expo' && Platform.OS === 'android') {
-    console.log('Skipping push token generation: Not supported in Expo Go on Android since SDK 53.');
+  // Expo Go on Android cannot obtain push tokens since SDK 53.
+  if (Constants.appOwnership === 'expo' && Platform.OS === 'android') return null;
+  if (!Device.isDevice) return null;
+
+  let token = null;
+  try {
+    const { status: existingStatus } = await Notifications.getPermissionsAsync();
+    let finalStatus = existingStatus;
+    if (existingStatus !== 'granted' && prompt) {
+      const { status } = await Notifications.requestPermissionsAsync();
+      finalStatus = status;
+    }
+    if (finalStatus !== 'granted') return null;
+
+    const projectId = Constants?.expoConfig?.extra?.eas?.projectId ?? Constants?.easConfig?.projectId;
+    token = (await Notifications.getExpoPushTokenAsync(projectId ? { projectId } : undefined)).data;
+  } catch (e) {
+    console.log('Push token unavailable:', e?.message);
     return null;
   }
 
-  if (Device.isDevice) {
-    try {
-      const { status: existingStatus } = await Notifications.getPermissionsAsync();
-      let finalStatus = existingStatus;
-      if (existingStatus !== 'granted') {
-        const { status } = await Notifications.requestPermissionsAsync();
-        finalStatus = status;
-      }
-      if (finalStatus !== 'granted') {
-        console.log('Failed to get push token for push notification!');
-        return;
-      }
-      
-      const projectId =
-        Constants?.expoConfig?.extra?.eas?.projectId ?? Constants?.easConfig?.projectId;
-        
-      if (!projectId) {
-         // Using basic getExpoPushTokenAsync if EAS isn't set up yet
-         token = (await Notifications.getExpoPushTokenAsync()).data;
-      } else {
-         token = (await Notifications.getExpoPushTokenAsync({ projectId })).data;
-      }
-      
-      console.log("Expo Push Token:", token);
-    } catch (e) {
-      console.log("Error getting token (Expected in some Expo Go environments):", e);
-    }
-  } else {
-    // Cannot use push notifications in simulator
-    console.log('Must use physical device for Push Notifications');
-  }
-
-  // If we got a token and we are logged in, save it to Firestore
   if (token && auth.currentUser) {
     try {
-      await updateDoc(doc(db, 'users', auth.currentUser.uid), {
-        expoPushToken: token,
-      });
+      await setDoc(
+        doc(db, 'users', auth.currentUser.uid),
+        { expoPushToken: token, notificationsEnabled: true },
+        { merge: true },
+      );
     } catch (error) {
-       console.error("Error saving token to firestore", error);
+      console.log('Could not save push token:', error?.message);
     }
   }
 
   return token;
 }
 
+export async function disablePushNotifications() {
+  if (!auth.currentUser) return;
+  await setDoc(
+    doc(db, 'users', auth.currentUser.uid),
+    { expoPushToken: deleteField(), notificationsEnabled: false },
+    { merge: true },
+  );
+}

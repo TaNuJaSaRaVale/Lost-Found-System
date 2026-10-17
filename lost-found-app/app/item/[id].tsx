@@ -1,538 +1,486 @@
-import { View, Text, ScrollView, TouchableOpacity, Alert, ActivityIndicator, Modal, TextInput, Image } from 'react-native';
+import { useEffect, useState } from 'react';
+import {
+  View, Text, ScrollView, TouchableOpacity, Alert, ActivityIndicator, Modal, TextInput, Image, Share,
+  KeyboardAvoidingView, Platform,
+} from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useState, useEffect } from 'react';
-import { doc, getDoc, setDoc, updateDoc, serverTimestamp, collection, query, where, getDocs, deleteDoc } from 'firebase/firestore';
-import { db, auth } from '../../services/firebase';
+import {
+  collection, doc, getDocs, onSnapshot, query, serverTimestamp, setDoc, updateDoc, where, addDoc,
+} from 'firebase/firestore';
 import { Ionicons } from '@expo/vector-icons';
-import { useTheme } from '../../hooks/useTheme';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { db } from '../../services/firebase';
 import { useAuth } from '../../context/AuthContext';
-
-const CATEGORY_STYLES: Record<string, { color: string; bg: string; darkColor: string; darkBg: string }> = {
-  'electronics': { color: 'text-blue-700', bg: 'bg-blue-100', darkColor: 'text-blue-200', darkBg: 'bg-blue-900/30' },
-  'wallet': { color: 'text-green-700', bg: 'bg-green-100', darkColor: 'text-green-200', darkBg: 'bg-green-900/30' },
-  'documents': { color: 'text-red-700', bg: 'bg-red-100', darkColor: 'text-red-200', darkBg: 'bg-red-900/30' },
-  'keys': { color: 'text-yellow-700', bg: 'bg-yellow-100', darkColor: 'text-yellow-200', darkBg: 'bg-yellow-900/30' },
-  'clothing': { color: 'text-purple-700', bg: 'bg-purple-100', darkColor: 'text-purple-200', darkBg: 'bg-purple-900/30' },
-  'others': { color: 'text-slate-700', bg: 'bg-slate-100', darkColor: 'text-slate-200', darkBg: 'bg-slate-800/30' },
-};
-
-const getCategoryStyle = (category: string) => {
-  const cat = category?.toLowerCase() || 'others';
-  return CATEGORY_STYLES[cat] || CATEGORY_STYLES['others'];
-};
+import { useColors } from '../../hooks/useTheme';
+import { deleteItemCascade, getItemImage, markItemResolved } from '../../services/items';
+import { approveClaim, rejectClaim, withdrawClaim, markClaimReturned, claimIdFor, Claim } from '../../services/claims';
+import { CategoryBadge, StatusBadge, Button, inputClass } from '../../components/ui';
+import { eventDateLabel, normalizeCategory, statusKind, timeAgo, ItemType } from '../../utils/format';
+import { LIMITS } from '../../constants/config';
 
 export default function ItemDetailScreen() {
   const router = useRouter();
-  const { id, type, sourceItemId, sourceItemType } = useLocalSearchParams(); 
-  const { theme } = useTheme();
-  const { profile } = useAuth();
-  
+  const colors = useColors();
+  const { user, profile } = useAuth();
+  const params = useLocalSearchParams<{ id: string; type: ItemType; sourceItemId?: string; sourceItemType?: string; justPosted?: string }>();
+  const { id, type, sourceItemId, sourceItemType } = params;
+  const isLostItem = type === 'lost_items';
+
   const [item, setItem] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  const [claiming, setClaiming] = useState(false);
-  const [userClaimId, setUserClaimId] = useState<string | null>(null);
-  const [claimStatus, setClaimStatus] = useState<string | null>(null);
-  const [currentUser, setCurrentUser] = useState(auth.currentUser);
-  const [isClaimModalVisible, setIsClaimModalVisible] = useState(false);
-  const [proofDescription, setProofDescription] = useState('');
+  const [image, setImage] = useState<string | null>(null);
+  const [myClaim, setMyClaim] = useState<Claim | null>(null);
+  const [incomingClaims, setIncomingClaims] = useState<Claim[]>([]);
+  const [busy, setBusy] = useState<string | null>(null);
 
-  // Report User State
-  const [isReportModalVisible, setIsReportModalVisible] = useState(false);
+  const [claimModal, setClaimModal] = useState(false);
+  const [proof, setProof] = useState('');
+  const [reportModal, setReportModal] = useState(false);
   const [reportReason, setReportReason] = useState('');
-  const [reportingUser, setReportingUser] = useState(false);
 
+  // Live item document
   useEffect(() => {
-    const unsubscribe = auth.onAuthStateChanged(user => setCurrentUser(user));
-    return unsubscribe;
-  }, []);
-
-  useEffect(() => {
-    const fetchItemAndClaim = async () => {
-      if (!id || !type) return;
-      try {
-        const docRef = doc(db, type as string, id as string);
-        const docSnap = await getDoc(docRef);
-        if (docSnap.exists()) {
-          setItem({ id: docSnap.id, ...docSnap.data() });
-        } else {
-          Alert.alert('Error', 'Item not found');
-          router.back();
-          return;
-        }
-
-        if (currentUser) {
-          const claimQ = query(
-             collection(db, 'claims'), 
-             where('itemId', '==', id), 
-             where('claimantId', '==', currentUser.uid)
-          );
-          const claimSnap = await getDocs(claimQ);
-          if (!claimSnap.empty) {
-             const claimData = claimSnap.docs[0].data();
-             setUserClaimId(claimSnap.docs[0].id);
-             setClaimStatus(claimData.status);
-          }
-        }
-      } catch (error) {
-        console.error(error);
-        Alert.alert('Error', 'Failed to fetch item details');
-      } finally {
-        setLoading(false);
+    if (!id || !type) return;
+    return onSnapshot(doc(db, type, id), snap => {
+      if (snap.exists()) {
+        setItem({ id: snap.id, ...snap.data() });
+      } else if (!snap.metadata.fromCache) {
+        setItem(null);
       }
-    };
-    fetchItemAndClaim();
-  }, [id, type, currentUser]);
+      setLoading(false);
+    }, () => setLoading(false));
+  }, [id, type]);
 
-  const handleClaimInitiate = () => {
-    if (!currentUser) {
-      Alert.alert('Authentication Required', 'Please log in to claim an item.');
-      return;
-    }
-    setProofDescription('');
-    setIsClaimModalVisible(true);
-  };
+  // Full-size photo (loaded once)
+  const itemLoaded = !!item;
+  useEffect(() => {
+    if (itemLoaded) getItemImage(item).then(setImage);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [itemLoaded]);
 
-  const handleFoundInitiate = () => {
-    if (!currentUser) {
-      Alert.alert('Authentication Required', 'Please log in to respond to this item.');
-      return;
-    }
-    setProofDescription('');
-    setIsClaimModalVisible(true);
-  };
+  const isReporter = !!user && item?.userId === user.uid;
 
-  const submitClaim = async () => {
-    if (!proofDescription.trim()) {
-      Alert.alert('Message Required', type === 'lost_items' ? 'Please provide some details on how/where you found it.' : 'Please provide some details to prove this item belongs to you.');
-      return;
-    }
+  // My own claim on this item (as claimant)
+  useEffect(() => {
+    if (!user || !id || isReporter) return;
+    const q = query(collection(db, 'claims'), where('claimantId', '==', user.uid), where('itemId', '==', id));
+    return onSnapshot(q, snap => {
+      const docs = snap.docs.map(d => ({ id: d.id, ...d.data() } as Claim));
+      setMyClaim(docs[0] || null);
+    }, () => {});
+  }, [user, id, isReporter]);
 
-    setClaiming(true);
+  // Claims I received on my item (as reporter)
+  useEffect(() => {
+    if (!user || !id || !isReporter) return;
+    const q = query(collection(db, 'claims'), where('ownerId', '==', user.uid), where('itemId', '==', id));
+    return onSnapshot(q, snap => {
+      setIncomingClaims(snap.docs.map(d => ({ id: d.id, ...d.data() } as Claim)));
+    }, () => {});
+  }, [user, id, isReporter]);
+
+  const run = async (key: string, fn: () => Promise<void>, success?: string) => {
+    setBusy(key);
     try {
-      if (!currentUser || !item) return;
+      await fn();
+      if (success) Alert.alert('Done', success);
+    } catch (e: any) {
+      Alert.alert('Something went wrong', e?.code === 'unavailable' ? 'You appear to be offline.' : e?.message);
+    } finally {
+      setBusy(null);
+    }
+  };
 
-      const claimantDoc = await getDoc(doc(db, 'users', currentUser.uid));
-      const ownerDoc = await getDoc(doc(db, 'users', item.userId));
-      
-      const claimantData = claimantDoc.exists() ? claimantDoc.data() : {};
-      const ownerData = ownerDoc.exists() ? ownerDoc.data() : {};
+  // Link the claim to the claimant's own matching report (so both close together).
+  const findMySourceItem = async () => {
+    if (sourceItemId && sourceItemType) return { id: sourceItemId, type: sourceItemType };
+    const otherType = isLostItem ? 'found_items' : 'lost_items';
+    const snap = await getDocs(query(collection(db, otherType), where('userId', '==', user!.uid)));
+    const open = snap.docs.filter(d => statusKind(d.data().status) === 'open');
+    const best = open.find(d => normalizeCategory(d.data().category) === normalizeCategory(item.category));
+    return best ? { id: best.id, type: otherType } : null;
+  };
 
-      let matchedSourceId = sourceItemId as string | undefined;
-      let matchedSourceType = sourceItemType as string | undefined;
-      
-      if (!matchedSourceId && currentUser) {
-         if (type === 'found_items') {
-            const myLostQ = query(collection(db, 'lost_items'), where('userId', '==', currentUser.uid), where('status', '==', 'open'));
-            const myLostSnap = await getDocs(myLostQ);
-            if (!myLostSnap.empty) {
-               const match = myLostSnap.docs.find(d => d.data().category === item.category) || myLostSnap.docs[0];
-               matchedSourceId = match.id;
-               matchedSourceType = 'lost_items';
-            }
-         } else if (type === 'lost_items') {
-            const myFoundQ = query(collection(db, 'found_items'), where('userId', '==', currentUser.uid), where('status', '==', 'open'));
-            const myFoundSnap = await getDocs(myFoundQ);
-            if (!myFoundSnap.empty) {
-               const match = myFoundSnap.docs.find(d => d.data().category === item.category) || myFoundSnap.docs[0];
-               matchedSourceId = match.id;
-               matchedSourceType = 'found_items';
-            }
-         }
-      }
+  const submitClaim = () => run('claim', async () => {
+    if (!proof.trim()) throw new Error(isLostItem ? 'Tell the owner where and when you found it.' : 'Describe a detail only the owner would know.');
+    if (!user || !item) return;
 
-      const claimRef = doc(collection(db, 'claims'));
-      const claimData = {
+    if (myClaim?.status === 'withdrawn') {
+      await updateDoc(doc(db, 'claims', myClaim.id), { status: 'pending', proofDescription: proof.trim(), updatedAt: serverTimestamp() });
+    } else {
+      const source = await findMySourceItem();
+      await setDoc(doc(db, 'claims', claimIdFor(id, user.uid)), {
         itemId: id,
         itemType: type,
-        sourceItemId: matchedSourceId || null,
-        sourceItemType: matchedSourceType || null,
+        sourceItemId: source?.id || null,
+        sourceItemType: source?.type || null,
         itemTitle: item.title,
-        claimantId: currentUser.uid,
-        claimantName: claimantData.name || currentUser.displayName || 'Unknown User',
-        claimantClass: claimantData.studentClass || 'Unknown Class',
-        ownerId: item.userId || '',
-        ownerName: ownerData.name || 'Owner',
+        claimantId: user.uid,
+        claimantName: profile?.name || user.displayName || 'Student',
+        claimantClass: profile?.studentClass || '',
+        ownerId: item.userId,
+        ownerName: item.userName || 'Reporter',
         status: 'pending',
-        proofDescription: proofDescription.trim(),
-        createdAt: serverTimestamp()
-      };
-      
-      await setDoc(claimRef, claimData);
-      
-      const itemRef = doc(db, type as string, id as string);
-      await updateDoc(itemRef, {
-        status: type === 'lost_items' ? 'pending_found' : 'pending_claim'
+        proofDescription: proof.trim(),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
       });
-      
-      if (matchedSourceId && matchedSourceType) {
-        const sourceItemRef = doc(db, matchedSourceType, matchedSourceId);
-        await updateDoc(sourceItemRef, {
-          status: matchedSourceType === 'lost_items' ? 'pending_found' : 'pending_claim'
-        });
-      }
-      
-      setIsClaimModalVisible(false);
-      Alert.alert('Success 🎉', type === 'lost_items' ? 'Message sent! The owner will review your details soon.' : 'Claim submitted! The owner will review your proof soon.');
-      router.back();
-    } catch (error: any) {
-      Alert.alert('Submission Failed', error.message);
-    } finally {
-      setClaiming(false);
     }
+    setClaimModal(false);
+    setProof('');
+  }, isLostItem ? 'Sent! The owner has been notified and can chat with you.' : 'Claim sent! The finder will review your proof and reply in chat.');
+
+  const submitReport = () => run('report', async () => {
+    if (!reportReason.trim()) throw new Error('Please tell us what is wrong.');
+    await addDoc(collection(db, 'user_reports'), {
+      reportedUserId: item.userId,
+      reportedBy: user!.uid,
+      reason: reportReason.trim(),
+      itemId: id,
+      itemType: type,
+      itemTitle: item.title,
+      createdAt: serverTimestamp(),
+    });
+    setReportModal(false);
+    setReportReason('');
+  }, 'Thanks. An admin will review this report.');
+
+  const handleDelete = () => {
+    Alert.alert('Delete report?', 'This removes the report and all claims on it. This cannot be undone.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete', style: 'destructive',
+        onPress: () => run('delete', async () => {
+          await deleteItemCascade(type, id, user!.uid);
+          router.back();
+        }),
+      },
+    ]);
   };
 
-  const submitUserReport = async () => {
-    if (!reportReason.trim()) {
-      Alert.alert('Reason Required', 'Please provide a reason for reporting this user.');
-      return;
-    }
-    
-    setReportingUser(true);
-    try {
-      if (!currentUser || !item) return;
-
-      const reportRef = doc(collection(db, 'user_reports'));
-      const reportData = {
-        reportedUserId: item.userId,
-        reportedBy: currentUser.uid,
-        reason: reportReason.trim(),
-        itemId: id as string,
-        createdAt: serverTimestamp()
-      };
-      
-      await setDoc(reportRef, reportData);
-      
-      setIsReportModalVisible(false);
-      setReportReason('');
-      Alert.alert('Report Submitted', 'Thank you. An admin will review this user.');
-    } catch (error: any) {
-      Alert.alert('Report Failed', error.message);
-    } finally {
-      setReportingUser(false);
-    }
+  const handleResolve = () => {
+    Alert.alert('Mark as resolved?', isLostItem ? 'Got it back? This closes the report.' : 'Returned to the owner? This closes the report.', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Yes, resolved', onPress: () => run('resolve', () => markItemResolved(type, id), 'Great news! The report is now closed. 🎉') },
+    ]);
   };
 
-  const handleDeleteItem = () => {
-    Alert.alert(
-      "Delete Report",
-      "Are you sure you want to delete this report? This action cannot be undone.",
-      [
-        { text: "Cancel", style: "cancel" },
-        { 
-          text: "Delete", 
-          style: "destructive",
-          onPress: async () => {
-            try {
-              setLoading(true);
-              await deleteDoc(doc(db, type as string, id as string));
-              
-              // Cascade delete claims
-              const claimsQ = query(collection(db, 'claims'), where('itemId', '==', id as string));
-              const claimsSnap = await getDocs(claimsQ);
-              claimsSnap.forEach(async (claimDoc) => {
-                 await deleteDoc(doc(db, 'claims', claimDoc.id));
-              });
-
-              Alert.alert("Success", "Item deleted successfully.");
-              router.replace(`/(tabs)/${type === 'lost_items' ? 'home' : 'found'}`);
-            } catch (error) {
-              console.error(error);
-              Alert.alert("Error", "Could not delete the item.");
-              setLoading(false);
-            }
-          }
-        }
-      ]
-    );
+  const handleShare = () => {
+    Share.share({
+      message:
+        `${isLostItem ? '🔍 LOST' : '✨ FOUND'}: ${item.title}\n` +
+        `📍 ${item.location}\n🗓 ${eventDateLabel(item)}\n` +
+        (item.reward ? `🎁 Reward: ${item.reward}\n` : '') +
+        `\nOpen in Campus Lost & Found: lostfoundapp://item/${id}?type=${type}`,
+    });
   };
 
-  const TimelineStep = ({ title, sub, date, active, completed, last }: any) => (
-    <View className="flex-row min-h-[70px]">
-      <View className="items-center mr-4">
-        <View className={`w-6 h-6 rounded-full items-center justify-center ${completed ? 'bg-secondary' : active ? 'bg-primary' : 'bg-gray-200 dark:bg-gray-800'}`}>
-           {completed ? (
-              <Ionicons name="checkmark" size={14} color="white" />
-           ) : (
-              <View className={`w-2 h-2 rounded-full ${active ? 'bg-white' : 'bg-gray-400'}`} />
-           )}
-        </View>
-        {!last && <View className={`w-[2px] flex-1 ${completed ? 'bg-secondary' : 'bg-gray-200 dark:bg-gray-800'}`} />}
-      </View>
-      <View className="pb-6">
-        <Text className={`text-base font-bold ${active || completed ? 'text-text dark:text-text-dark' : 'text-textLight dark:text-textLight-dark'}`}>{title}</Text>
-        <Text className="text-textLight dark:text-textLight-dark text-xs">{sub}</Text>
-        {date && <Text className="text-primary font-bold text-[10px] mt-1">{date}</Text>}
-      </View>
-    </View>
-  );
+  const confirmApprove = (claim: Claim) => {
+    Alert.alert('Approve this claim?', `${claim.claimantName} will be marked as the owner/finder. Other pending claims will be declined.`, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Approve', onPress: () => run(`approve-${claim.id}`, () => approveClaim(claim), 'Approved! Use the chat to arrange the handover.') },
+    ]);
+  };
+
+  const confirmReturned = (claim: Claim) => {
+    Alert.alert('Handover complete?', 'Confirm the item was physically handed over. This closes the case.', [
+      { text: 'Not yet', style: 'cancel' },
+      { text: 'Yes, done', onPress: () => run('returned', () => markClaimReturned(claim), 'Case closed. Thanks for helping! 🎉') },
+    ]);
+  };
 
   if (loading) {
     return (
       <View className="flex-1 bg-background dark:bg-background-dark justify-center items-center">
-        <ActivityIndicator size="large" color="#6366F1" />
+        <ActivityIndicator size="large" color={colors.primary} />
       </View>
     );
   }
 
-  if (!item) return null;
+  if (!item) {
+    return (
+      <SafeAreaView className="flex-1 bg-background dark:bg-background-dark items-center justify-center px-10">
+        <Ionicons name="trash-bin-outline" size={48} color={colors.textLight} />
+        <Text className="text-text dark:text-text-dark font-bold text-lg mt-4">This report no longer exists</Text>
+        <Text className="text-textLight dark:text-textLight-dark text-center mt-2">It may have been resolved and removed by its owner.</Text>
+        <View className="mt-6 w-full"><Button title="Go back" variant="ghost" onPress={() => router.back()} /></View>
+      </SafeAreaView>
+    );
+  }
 
-  const isReporter = currentUser?.uid === item.userId;
-  const isPending = item.status === 'pending_claim' || item.status === 'pending_handover' || item.status === 'pending_found';
-  const isReturned = item.status === 'returned' || item.status === 'claimed';
-  const catStyle = getCategoryStyle(item.category);
-
-  // Timeline Logic
-  const timeline = [
-    { title: 'Reported', sub: `Item marked as ${type === 'lost_items' ? 'Lost' : 'Found'}`, date: item.dateLost || item.dateFound || 'Initially', completed: true },
-    { title: 'Spotted', sub: 'Someone identified the match', active: isPending && !isReturned, completed: isReturned || claimStatus === 'approved' || item.status === 'pending_handover' },
-    { title: 'Verified', sub: 'Owner confirmed ownership', active: (claimStatus === 'approved' || item.status === 'pending_handover') && !isReturned, completed: isReturned || item.status === 'pending_handover' },
-    { title: 'Handed Over', sub: 'Item returned to owner', active: isReturned, completed: isReturned, last: true }
-  ];
+  const kind = statusKind(item.status);
+  const isOpen = kind === 'open';
+  const pendingIncoming = incomingClaims.filter(c => c.status === 'pending');
+  const approvedIncoming = incomingClaims.find(c => c.status === 'approved');
 
   return (
-    <ScrollView className="flex-1 bg-background dark:bg-background-dark">
-      <View className="h-80 bg-gray-100 dark:bg-gray-900 items-center justify-center overflow-hidden">
-        {item.imageUrl ? (
-          <Image source={{ uri: item.imageUrl }} className="w-full h-full" resizeMode="cover" />
-        ) : (
-          <View className="items-center">
-            <Ionicons name="camera-outline" size={64} color="#94A3AF" />
-            <Text className="text-textLight mt-4 font-bold text-lg uppercase tracking-widest">No Image</Text>
-          </View>
-        )}
-        <View className="absolute top-10 left-6">
-          <TouchableOpacity 
-            onPress={() => router.back()}
-            className="bg-black/20 p-2 rounded-full blur-md"
-          >
-            <Ionicons name="arrow-back" size={24} color="white" />
-          </TouchableOpacity>
-        </View>
-      </View>
-
-      <View className="p-8 -mt-8 bg-background dark:bg-background-dark rounded-t-[40px] shadow-2xl">
-        <View className="flex-row justify-between items-start mb-4">
-          <View className="flex-1">
-             <Text className="text-3xl font-extrabold text-text dark:text-text-dark mb-2">{item.title}</Text>
-             <View className={`self-start px-4 py-1.5 rounded-full ${catStyle.bg} dark:${catStyle.darkBg}`}>
-                <Text className={`text-[10px] font-extrabold uppercase tracking-widest ${catStyle.color} dark:${catStyle.darkColor}`}>
-                  {item.category}
-                </Text>
-             </View>
-          </View>
-          <View className="items-end">
-             {isReporter && (
-                <TouchableOpacity onPress={handleDeleteItem} className="mb-2 bg-red-100 dark:bg-red-900/30 p-2 rounded-full border border-red-200 dark:border-red-800">
-                   <Ionicons name="trash-outline" size={16} color="#ef4444" />
-                </TouchableOpacity>
-             )}
-             {!isReporter && currentUser && (
-                <TouchableOpacity onPress={() => setIsReportModalVisible(true)} className="mb-2 bg-red-100 dark:bg-red-900/30 p-2 rounded-full">
-                   <Ionicons name="flag-outline" size={16} color="#ef4444" />
-                </TouchableOpacity>
-             )}
-             {isPending && <View className="bg-accent/10 px-3 py-1 rounded-full border border-accent/20"><Text className="text-accent font-bold text-[10px] uppercase">Pending</Text></View>}
-             {isReturned && <View className="bg-secondary/10 px-3 py-1 rounded-full border border-secondary/20"><Text className="text-secondary font-bold text-[10px] uppercase">Returned</Text></View>}
-          </View>
-        </View>
-
-        <View className="flex-row justify-between mb-8">
-           <View className="flex-1 items-center bg-gray-50 dark:bg-gray-900 p-4 rounded-3xl mr-2">
-              <Ionicons name="location" size={20} color="#6366F1" />
-              <Text className="text-text dark:text-text-dark font-bold mt-2" numberOfLines={1}>{item.location}</Text>
-              <Text className="text-textLight dark:text-textLight-dark text-[10px]">Location</Text>
-           </View>
-           <View className="flex-1 items-center bg-gray-50 dark:bg-gray-900 p-4 rounded-3xl ml-2">
-              <Ionicons name="calendar" size={20} color="#6366F1" />
-              <Text className="text-text dark:text-text-dark font-bold mt-2" numberOfLines={1}>{item.dateLost || item.dateFound || 'Recent'}</Text>
-              <Text className="text-textLight dark:text-textLight-dark text-[10px]">Time</Text>
-           </View>
-        </View>
-
-        <Text className="text-lg font-bold text-text dark:text-text-dark mb-4">Description</Text>
-        <Text className="text-textLight dark:text-textLight-dark text-base leading-6 mb-8">
-          {item.description || "The reporter didn't provide a detailed description yet."}
-        </Text>
-
-        {/* Journey Timeline */}
-        <View className="bg-gray-50 dark:bg-gray-900/50 p-6 rounded-[32px] border border-gray-100 dark:border-gray-800 mb-8">
-           <Text className="text-xs font-bold text-textLight dark:text-textLight-dark uppercase tracking-widest mb-6">Item Journey Timeline</Text>
-           {timeline.map((t, idx) => <TimelineStep key={idx} {...t} />)}
-        </View>
-
-        {item.reward && (
-          <View className="bg-primary/5 p-6 rounded-[32px] border border-primary/10 mb-8 flex-row items-center">
-            <View className="bg-primary/10 p-3 rounded-2xl mr-4">
-              <Ionicons name="gift" size={24} color="#6366F1" />
-            </View>
-            <View>
-              <Text className="text-[10px] text-primary font-bold uppercase tracking-widest">Reward Offered</Text>
-              <Text className="text-xl font-bold text-text dark:text-text-dark">{item.reward}</Text>
-            </View>
-          </View>
-        )}
-
-        {!isReporter && !isReturned && type === 'found_items' && (
-          <>
-            {userClaimId ? (
-              claimStatus === 'rejected' ? (
-                 <View className="bg-red-50 dark:bg-red-900/30 py-5 rounded-2xl items-center shadow-xl border border-red-200 dark:border-red-800">
-                    <Text className="text-red-500 font-extrabold text-lg">Claim Rejected</Text>
-                 </View>
-              ) : (
-                <TouchableOpacity 
-                  className="bg-primary py-5 rounded-2xl items-center flex-row justify-center shadow-xl shadow-primary/30"
-                  onPress={() => router.push(`/chat/${userClaimId}`)}
-                >
-                  <Ionicons name="chatbubbles" size={22} color="white" />
-                  <Text className="text-white font-extrabold text-lg ml-3">Message Finder</Text>
-                </TouchableOpacity>
-              )
-            ) : !isPending && (
-              <TouchableOpacity 
-                className="bg-primary py-5 rounded-2xl items-center shadow-xl shadow-primary/30"
-                onPress={handleClaimInitiate}
-                disabled={claiming}
-              >
-                {claiming ? <ActivityIndicator color="#fff" /> : <Text className="text-white font-extrabold text-lg">Proclaim: This is mine!</Text>}
+    <View className="flex-1 bg-background dark:bg-background-dark">
+      <ScrollView contentContainerStyle={{ paddingBottom: 40 }}>
+        {/* Hero image */}
+        <View className="h-72 bg-muted dark:bg-muted-dark items-center justify-center">
+          {image ? (
+            <Image source={{ uri: image }} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
+          ) : (
+            <Ionicons name="image-outline" size={56} color={colors.textLight} />
+          )}
+          <SafeAreaView edges={['top']} className="absolute top-0 left-0 right-0 flex-row justify-between px-4 pt-2">
+            <TouchableOpacity onPress={() => router.back()} className="bg-black/40 p-2.5 rounded-full">
+              <Ionicons name="arrow-back" size={22} color="white" />
+            </TouchableOpacity>
+            <View className="flex-row gap-2">
+              <TouchableOpacity onPress={handleShare} className="bg-black/40 p-2.5 rounded-full">
+                <Ionicons name="share-social-outline" size={22} color="white" />
               </TouchableOpacity>
-            )}
-          </>
-        )}
-
-        {!isReporter && !isReturned && type === 'lost_items' && (
-          <>
-            {userClaimId ? (
-              claimStatus === 'rejected' ? (
-                 <View className="bg-red-50 dark:bg-red-900/30 py-5 rounded-2xl items-center shadow-xl border border-red-200 dark:border-red-800">
-                    <Text className="text-red-500 font-extrabold text-lg">Claim Rejected</Text>
-                 </View>
-              ) : (
-                <TouchableOpacity 
-                  className="bg-secondary py-5 rounded-2xl items-center flex-row justify-center shadow-xl shadow-secondary/30"
-                  onPress={() => router.push(`/chat/${userClaimId}`)}
-                >
-                  <Ionicons name="chatbubbles" size={22} color="white" />
-                  <Text className="text-white font-extrabold text-lg ml-3">Message Owner</Text>
+              {!isReporter && (
+                <TouchableOpacity onPress={() => setReportModal(true)} className="bg-black/40 p-2.5 rounded-full">
+                  <Ionicons name="flag-outline" size={22} color="white" />
                 </TouchableOpacity>
-              )
-            ) : !isPending && (
-              <TouchableOpacity 
-                className="bg-secondary py-5 rounded-2xl items-center shadow-xl shadow-secondary/30"
-                onPress={handleFoundInitiate}
-                disabled={claiming}
-              >
-                {claiming ? <ActivityIndicator color="#fff" /> : <Text className="text-white font-extrabold text-lg">I found this item</Text>}
-              </TouchableOpacity>
-            )}
-          </>
-        )}
+              )}
+            </View>
+          </SafeAreaView>
+        </View>
 
-        {isReporter && isPending && (
-          <View className="bg-accent/5 p-6 rounded-[32px] border border-accent/20 flex-row items-center">
-            <Ionicons name="alert-circle" size={24} color="#F59E0B" />
-            <Text className="text-accent dark:text-accent-dark font-bold ml-3 flex-1">
-              Someone has claimed this! Visit your profile to review proof.
-            </Text>
-          </View>
-        )}
-
-        {isReturned && (
-          <View className="bg-secondary/5 p-6 rounded-[32px] border border-secondary/20 flex-row items-center">
-            <Ionicons name="checkmark-done-circle" size={24} color="#10B981" />
-            <Text className="text-secondary dark:text-secondary-dark font-bold ml-3 flex-1 text-center">
-              Resolved & Returned! Case Closed.
-            </Text>
-          </View>
-        )}
-      </View>
-      <View className="h-20" />
-
-      <Modal animationType="slide" transparent={true} visible={isClaimModalVisible} onRequestClose={() => setIsClaimModalVisible(false)}>
-        <View className="flex-1 justify-end bg-black/60">
-          <View className="bg-surface dark:bg-surface-dark rounded-t-[40px] p-8 shadow-2xl">
-            <View className="flex-row justify-between items-center mb-6">
-              <Text className="text-2xl font-bold text-text dark:text-text-dark">
-                {type === 'lost_items' ? 'Contact Owner' : 'Verify Ownership'}
+        <View className="px-5 pt-5 -mt-6 bg-background dark:bg-background-dark rounded-t-3xl">
+          {params.justPosted === '1' && (
+            <View className="bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/30 rounded-2xl p-4 mb-4 flex-row items-center">
+              <Ionicons name="checkmark-circle" size={22} color={colors.secondary} />
+              <Text className="text-emerald-800 dark:text-emerald-200 ml-3 flex-1">
+                {"Published! We'll notify you when someone responds or a match appears."}
               </Text>
-              <TouchableOpacity onPress={() => setIsClaimModalVisible(false)}>
-                <Ionicons name="close-circle" size={32} color="#9BA3AF" />
+            </View>
+          )}
+
+          <View className="flex-row items-center mb-2 gap-2">
+            <View className={`px-2.5 py-1 rounded-full ${isLostItem ? 'bg-primary/10' : 'bg-secondary/10'}`}>
+              <Text className={`text-[10px] font-extrabold uppercase ${isLostItem ? 'text-primary dark:text-primary-dark' : 'text-secondary dark:text-secondary-dark'}`}>
+                {isLostItem ? 'Lost' : 'Found'}
+              </Text>
+            </View>
+            <StatusBadge status={item.status} />
+          </View>
+          <Text className="text-2xl font-extrabold text-text dark:text-text-dark mb-2">{item.title}</Text>
+          <CategoryBadge category={item.category} />
+
+          <View className="flex-row mt-5 gap-3">
+            <InfoTile icon="location" label={isLostItem ? 'Last seen' : 'Found at'} value={item.location} color={colors.primary} />
+            <InfoTile icon="calendar" label="When" value={eventDateLabel(item)} color={colors.primary} />
+          </View>
+          {!!item.currentlyAt && (
+            <View className="mt-3"><InfoTile icon="business" label="Currently kept at" value={item.currentlyAt} color={colors.secondary} /></View>
+          )}
+          {!!item.reward && (
+            <View className="mt-3"><InfoTile icon="gift" label="Reward offered" value={item.reward} color={colors.accent} /></View>
+          )}
+
+          <Text className="text-base font-bold text-text dark:text-text-dark mt-6 mb-2">Details</Text>
+          <Text className="text-textLight dark:text-textLight-dark text-base leading-6">
+            {item.description || 'No extra details were provided.'}
+          </Text>
+          <Text className="text-textLight dark:text-textLight-dark text-xs mt-4">
+            Posted {timeAgo(item.createdAt)}{item.userName ? ` by ${isReporter ? 'you' : item.userName}` : ''}
+          </Text>
+
+          {/* ---------- Reporter view ---------- */}
+          {isReporter && (
+            <View className="mt-6">
+              {approvedIncoming && kind === 'pending' && (
+                <ClaimCard claim={approvedIncoming} colors={colors} router={router} highlight>
+                  <Text className="text-textLight dark:text-textLight-dark text-sm mb-3">
+                    Approved. Meet in a public place to hand it over, then confirm below.
+                  </Text>
+                  <Button title="Confirm handover done" icon="checkmark-done" variant="secondary"
+                    loading={busy === 'returned'} onPress={() => confirmReturned(approvedIncoming)} />
+                </ClaimCard>
+              )}
+
+              {pendingIncoming.length > 0 && (
+                <Text className="text-base font-bold text-text dark:text-text-dark mb-3">
+                  {pendingIncoming.length} {pendingIncoming.length === 1 ? 'response' : 'responses'} to review
+                </Text>
+              )}
+              {pendingIncoming.map(claim => (
+                <ClaimCard key={claim.id} claim={claim} colors={colors} router={router}>
+                  <View className="flex-row gap-3">
+                    <View className="flex-1">
+                      <Button title="Decline" variant="ghost" loading={busy === `reject-${claim.id}`}
+                        onPress={() => run(`reject-${claim.id}`, () => rejectClaim(claim))} />
+                    </View>
+                    <View className="flex-1">
+                      <Button title="Approve" variant="secondary" loading={busy === `approve-${claim.id}`} onPress={() => confirmApprove(claim)} />
+                    </View>
+                  </View>
+                </ClaimCard>
+              ))}
+
+              <View className="flex-row gap-3 mt-2">
+                {isOpen && (
+                  <View className="flex-1">
+                    <Button title="Mark resolved" icon="checkmark-done" variant="secondary" loading={busy === 'resolve'} onPress={handleResolve} />
+                  </View>
+                )}
+                <View className="flex-1">
+                  <Button title="Delete" icon="trash-outline" variant="ghost" loading={busy === 'delete'} onPress={handleDelete} />
+                </View>
+              </View>
+            </View>
+          )}
+
+          {/* ---------- Visitor view ---------- */}
+          {!isReporter && (
+            <View className="mt-6">
+              {myClaim && myClaim.status !== 'withdrawn' ? (
+                <MyClaimPanel claim={myClaim} isLostItem={isLostItem} router={router}
+                  busy={busy === 'withdraw'} onWithdraw={() => run('withdraw', () => withdrawClaim(myClaim))} />
+              ) : isOpen ? (
+                <Button
+                  title={isLostItem ? 'I found this item' : 'This is mine — claim it'}
+                  icon={isLostItem ? 'hand-left-outline' : 'shield-checkmark-outline'}
+                  variant={isLostItem ? 'secondary' : 'primary'}
+                  onPress={() => { setProof(''); setClaimModal(true); }}
+                />
+              ) : (
+                <View className="bg-muted dark:bg-muted-dark rounded-2xl p-4 items-center">
+                  <Text className="text-textLight dark:text-textLight-dark font-semibold">
+                    {kind === 'returned' ? 'This case is closed — the item was returned. 🎉' : 'A handover is already in progress for this item.'}
+                  </Text>
+                </View>
+              )}
+            </View>
+          )}
+        </View>
+      </ScrollView>
+
+      {/* Claim / respond modal */}
+      <Modal animationType="slide" transparent visible={claimModal} onRequestClose={() => setClaimModal(false)}>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} className="flex-1 justify-end bg-black/60">
+          <View className="bg-surface dark:bg-surface-dark rounded-t-3xl p-6 pb-10">
+            <View className="flex-row justify-between items-center mb-3">
+              <Text className="text-xl font-bold text-text dark:text-text-dark">{isLostItem ? 'Tell the owner' : 'Prove it\'s yours'}</Text>
+              <TouchableOpacity onPress={() => setClaimModal(false)} hitSlop={10}>
+                <Ionicons name="close" size={26} color={colors.textLight} />
               </TouchableOpacity>
             </View>
-
-            <Text className="text-textLight dark:text-textLight-dark mb-6 text-base">
-              {type === 'lost_items' 
-                ? "Let the owner know where and when you found their item. This will start a secure chat." 
-                : "To prevent scams, please describe unique marks or specific details that only the true owner would know."}
+            <Text className="text-textLight dark:text-textLight-dark mb-4">
+              {isLostItem
+                ? 'Where and when did you find it? Where is it now? This starts a private chat with the owner.'
+                : 'Describe something only the owner would know — a scratch, sticker, lock-screen photo, contents, etc.'}
             </Text>
-
             <TextInput
-              className="bg-gray-50 dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-3xl p-5 text-text dark:text-text-dark text-base mb-8 min-h-[140px]"
-              placeholder={type === 'lost_items' ? "e.g. I found it near the library this morning. I left it with the front desk..." : "e.g. Broken corner on the left, name written in blue ink inside..."}
-              placeholderTextColor="#9CA3AF"
-              value={proofDescription}
-              onChangeText={setProofDescription}
+              className={inputClass}
+              style={{ minHeight: 120 }}
+              placeholder={isLostItem ? 'e.g. Found it in Lab 3 this morning, handed it to the security desk.' : 'e.g. Has a cracked corner and a Naruto sticker on the back.'}
+              placeholderTextColor={colors.placeholder}
+              value={proof}
+              onChangeText={setProof}
+              maxLength={LIMITS.proof}
               multiline
               textAlignVertical="top"
               autoFocus
             />
-
-            <TouchableOpacity className={`${type === 'lost_items' ? 'bg-secondary shadow-secondary/30' : 'bg-primary shadow-primary/30'} py-5 rounded-2xl items-center shadow-xl`} onPress={submitClaim} disabled={claiming}>
-              {claiming ? <ActivityIndicator color="#fff" /> : <Text className="text-white font-extrabold text-lg">{type === 'lost_items' ? 'Send Message' : 'Send Verification Request'}</Text>}
-            </TouchableOpacity>
+            <View className="mt-4">
+              <Button title={isLostItem ? 'Send to owner' : 'Send claim'} variant={isLostItem ? 'secondary' : 'primary'} loading={busy === 'claim'} onPress={submitClaim} />
+            </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
-      {/* Report User Modal */}
-      <Modal animationType="fade" transparent={true} visible={isReportModalVisible} onRequestClose={() => setIsReportModalVisible(false)}>
-        <View className="flex-1 justify-center items-center bg-black/60 px-4">
-          <View className="bg-surface dark:bg-surface-dark rounded-[32px] p-6 w-full shadow-2xl border border-red-100 dark:border-red-900/20">
-            <View className="flex-row items-center mb-4">
-              <View className="bg-red-100 dark:bg-red-900/30 p-3 rounded-full mr-4">
-                <Ionicons name="warning" size={24} color="#ef4444" />
-              </View>
-              <Text className="text-xl font-bold text-text dark:text-text-dark flex-1">Report User</Text>
-              <TouchableOpacity onPress={() => setIsReportModalVisible(false)}>
-                <Ionicons name="close" size={24} color="#9CA3AF" />
-              </TouchableOpacity>
-            </View>
-
-            <Text className="text-textLight dark:text-textLight-dark mb-4 text-sm">
-              Please let us know why you are reporting the user who posted this item. An admin will review it shortly.
-            </Text>
-
+      {/* Report modal */}
+      <Modal animationType="fade" transparent visible={reportModal} onRequestClose={() => setReportModal(false)}>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} className="flex-1 justify-center bg-black/60 px-5">
+          <View className="bg-surface dark:bg-surface-dark rounded-3xl p-6">
+            <Text className="text-xl font-bold text-text dark:text-text-dark mb-2">Report this post</Text>
+            <Text className="text-textLight dark:text-textLight-dark mb-4">Spam, scam, fake claim or offensive content? Admins will review it.</Text>
             <TextInput
-              className="bg-gray-50 dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-3xl p-5 text-text dark:text-text-dark text-base mb-6 min-h-[100px]"
-              placeholder="Reason for reporting (e.g., spam, scam, offensive content)"
-              placeholderTextColor="#9CA3AF"
+              className={inputClass}
+              style={{ minHeight: 90 }}
+              placeholder="What's wrong?"
+              placeholderTextColor={colors.placeholder}
               value={reportReason}
               onChangeText={setReportReason}
+              maxLength={LIMITS.reportReason}
               multiline
               textAlignVertical="top"
             />
-
-            <View className="flex-row space-x-3 gap-3">
-              <TouchableOpacity 
-                className="bg-gray-100 dark:bg-gray-800 py-4 rounded-2xl flex-1 items-center" 
-                onPress={() => setIsReportModalVisible(false)}
-                disabled={reportingUser}
-              >
-                <Text className="text-text dark:text-text-dark font-bold">Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity 
-                className="bg-red-500 py-4 rounded-2xl flex-1 items-center shadow-lg shadow-red-500/30" 
-                onPress={submitUserReport} 
-                disabled={reportingUser}
-              >
-                {reportingUser ? <ActivityIndicator color="#fff" /> : <Text className="text-white font-bold">Report</Text>}
-              </TouchableOpacity>
+            <View className="flex-row gap-3 mt-4">
+              <View className="flex-1"><Button title="Cancel" variant="ghost" onPress={() => setReportModal(false)} /></View>
+              <View className="flex-1"><Button title="Report" variant="danger" loading={busy === 'report'} onPress={submitReport} /></View>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
-
-    </ScrollView>
+    </View>
   );
 }
 
+function InfoTile({ icon, label, value, color }: { icon: any; label: string; value: string; color: string }) {
+  return (
+    <View className="flex-1 bg-surface dark:bg-surface-dark border border-line dark:border-line-dark rounded-2xl p-3.5 flex-row items-center">
+      <Ionicons name={icon} size={18} color={color} />
+      <View className="ml-2.5 flex-1">
+        <Text className="text-[10px] uppercase font-bold text-textLight dark:text-textLight-dark">{label}</Text>
+        <Text className="text-text dark:text-text-dark font-semibold" numberOfLines={2}>{value}</Text>
+      </View>
+    </View>
+  );
+}
+
+function ClaimCard({ claim, colors, router, highlight, children }: any) {
+  const unread = claim.hasUnread && claim.lastMessageSenderId === claim.claimantId;
+  return (
+    <View className={`bg-surface dark:bg-surface-dark rounded-2xl p-4 mb-3 border ${highlight ? 'border-secondary' : 'border-line dark:border-line-dark'}`}>
+      <View className="flex-row items-center mb-2">
+        <View className="bg-primary/10 w-10 h-10 rounded-full items-center justify-center mr-3">
+          <Text className="text-primary dark:text-primary-dark font-bold">{(claim.claimantName || '?')[0].toUpperCase()}</Text>
+        </View>
+        <View className="flex-1">
+          <Text className="text-text dark:text-text-dark font-bold">{claim.claimantName}</Text>
+          {!!claim.claimantClass && <Text className="text-textLight dark:text-textLight-dark text-xs">{claim.claimantClass}</Text>}
+        </View>
+        <TouchableOpacity onPress={() => router.push(`/chat/${claim.id}`)} className="bg-primary/10 p-2.5 rounded-full">
+          <Ionicons name="chatbubble-ellipses-outline" size={20} color={colors.primary} />
+          {unread && <View className="absolute top-1 right-1 w-2.5 h-2.5 rounded-full bg-danger" />}
+        </TouchableOpacity>
+      </View>
+      <View className="bg-muted dark:bg-muted-dark rounded-xl p-3 mb-3">
+        <Text className="text-text dark:text-text-dark">{claim.proofDescription}</Text>
+      </View>
+      {children}
+    </View>
+  );
+}
+
+function MyClaimPanel({ claim, isLostItem, router, busy, onWithdraw }: any) {
+  const status: string = claim.status;
+  const info: Record<string, { text: string; box: string; label: string }> = {
+    pending: {
+      text: isLostItem ? 'Sent. Waiting for the owner to respond.' : 'Claim sent. Waiting for the finder to verify.',
+      box: 'bg-amber-50 dark:bg-amber-500/10', label: 'text-amber-800 dark:text-amber-200',
+    },
+    approved: {
+      text: 'Approved! Chat to arrange a safe handover in a public place.',
+      box: 'bg-emerald-50 dark:bg-emerald-500/10', label: 'text-emerald-800 dark:text-emerald-200',
+    },
+    returned: {
+      text: 'Handover complete. Case closed. 🎉',
+      box: 'bg-emerald-50 dark:bg-emerald-500/10', label: 'text-emerald-800 dark:text-emerald-200',
+    },
+    rejected: {
+      text: 'Your claim was declined by the reporter.',
+      box: 'bg-rose-50 dark:bg-rose-500/10', label: 'text-rose-800 dark:text-rose-200',
+    },
+  };
+  const current = info[status] || info.pending;
+  return (
+    <View>
+      <View className={`rounded-2xl p-4 mb-3 ${current.box}`}>
+        <Text className={`font-semibold ${current.label}`}>{current.text}</Text>
+      </View>
+      {status !== 'rejected' && (
+        <Button title="Open chat" icon="chatbubbles-outline" onPress={() => router.push(`/chat/${claim.id}`)} />
+      )}
+      {status === 'pending' && (
+        <View className="mt-3"><Button title="Withdraw claim" variant="ghost" loading={busy} onPress={onWithdraw} /></View>
+      )}
+    </View>
+  );
+}

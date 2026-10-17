@@ -1,65 +1,60 @@
+import { useEffect, useState } from 'react';
 import { Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { Image, View } from 'react-native';
+import { collection, onSnapshot, query, where } from 'firebase/firestore';
+import { db } from '../../services/firebase';
 import { useAuth } from '../../context/AuthContext';
-import { useColorScheme } from 'nativewind';
+import { useColors } from '../../hooks/useTheme';
 
 export default function TabLayout() {
-  const { profile, isAdminMode } = useAuth();
-  const { colorScheme } = useColorScheme();
-  const isDark = colorScheme === 'dark';
+  const { user, isAdminMode } = useAuth();
+  const colors = useColors();
+  const [pendingReviews, setPendingReviews] = useState(0);
+
+  // Badge on the Profile tab: claims waiting for this user's decision.
+  useEffect(() => {
+    if (!user) return;
+    const q = query(collection(db, 'claims'), where('ownerId', '==', user.uid), where('status', '==', 'pending'));
+    return onSnapshot(q, snap => setPendingReviews(snap.size), () => setPendingReviews(0));
+  }, [user]);
 
   return (
     <Tabs
       screenOptions={{
         headerShown: true,
-        tabBarActiveTintColor: '#6366F1', // primary color
-        tabBarInactiveTintColor: isDark ? '#6B7280' : '#9CA3AF', 
+        tabBarActiveTintColor: colors.primary,
+        tabBarInactiveTintColor: colors.textLight,
+        tabBarLabelStyle: { fontWeight: '600', fontSize: 11 },
         tabBarStyle: {
-          backgroundColor: isDark ? '#1F2937' : '#ffffff',
-          borderTopColor: isDark ? '#374151' : '#f3f4f6',
+          backgroundColor: colors.surface,
+          borderTopColor: colors.line,
           elevation: 0,
           shadowOpacity: 0,
         },
         headerStyle: {
-          backgroundColor: isDark ? '#1F2937' : '#ffffff',
+          backgroundColor: colors.surface,
           elevation: 0,
           shadowOpacity: 0,
           borderBottomWidth: 1,
-          borderBottomColor: isDark ? '#374151' : '#f3f4f6',
+          borderBottomColor: colors.line,
         },
-        headerTitleStyle: {
-          fontWeight: 'bold',
-          color: isDark ? '#F9FAFB' : '#1f2937',
-        }
+        headerTitleStyle: { fontWeight: 'bold', color: colors.text },
+        sceneStyle: { backgroundColor: colors.background },
       }}>
       <Tabs.Screen
         name="home"
         options={{
-          headerTitle: () => (
-            <Image 
-              source={require('../../assets/images/logo.png')} 
-              style={{ width: 120, height: 40 }}
-              resizeMode="contain"
-            />
-          ),
-          tabBarLabel: 'Lost',
-          tabBarIcon: ({ color }) => <Ionicons name="search" size={24} color={color} />,
+          headerShown: false,
+          title: 'Lost',
+          tabBarIcon: ({ color, focused }) => <Ionicons name={focused ? 'search' : 'search-outline'} size={24} color={color} />,
         }}
       />
-
       <Tabs.Screen
         name="found"
         options={{
-          title: 'Found Items',
-          tabBarIcon: ({ color }) => <Ionicons name="sparkles" size={24} color={color} />,
-        }}
-      />
-      <Tabs.Screen
-        name="matches"
-        options={{
-          title: 'Matches',
-          tabBarIcon: ({ color }) => <Ionicons name="git-compare" size={24} color={color} />,
+          headerShown: false,
+          title: 'Found',
+          tabBarIcon: ({ color, focused }) => <Ionicons name={focused ? 'sparkles' : 'sparkles-outline'} size={24} color={color} />,
         }}
       />
       <Tabs.Screen
@@ -67,7 +62,14 @@ export default function TabLayout() {
         options={{
           href: isAdminMode ? null : '/(tabs)/report',
           title: 'Report',
-          tabBarIcon: ({ color }) => <Ionicons name="add-circle" size={28} color={color} />,
+          tabBarIcon: ({ color }) => <Ionicons name="add-circle" size={30} color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="matches"
+        options={{
+          title: 'Matches',
+          tabBarIcon: ({ color, focused }) => <Ionicons name={focused ? 'git-compare' : 'git-compare-outline'} size={24} color={color} />,
         }}
       />
       <Tabs.Screen
@@ -75,14 +77,16 @@ export default function TabLayout() {
         options={{
           href: isAdminMode ? '/(tabs)/admin' : null,
           title: 'Admin',
-          tabBarIcon: ({ color }) => <Ionicons name="shield-checkmark" size={24} color={color} />,
+          tabBarIcon: ({ color, focused }) => <Ionicons name={focused ? 'shield-checkmark' : 'shield-checkmark-outline'} size={24} color={color} />,
         }}
       />
       <Tabs.Screen
         name="profile"
         options={{
           title: 'Profile',
-          tabBarIcon: ({ color }) => <Ionicons name="person" size={24} color={color} />,
+          tabBarBadge: pendingReviews > 0 ? pendingReviews : undefined,
+          tabBarBadgeStyle: { backgroundColor: colors.danger, fontSize: 10 },
+          tabBarIcon: ({ color, focused }) => <Ionicons name={focused ? 'person' : 'person-outline'} size={24} color={color} />,
         }}
       />
     </Tabs>

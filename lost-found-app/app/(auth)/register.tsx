@@ -1,305 +1,156 @@
 import { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, Alert, ActivityIndicator, ScrollView, Image, Switch } from 'react-native';
+import { View, Text, TouchableOpacity, Alert, ScrollView, Image, Switch, KeyboardAvoidingView, Platform, Linking } from 'react-native';
 import { useRouter } from 'expo-router';
-import { createUserWithEmailAndPassword, updateProfile, GoogleAuthProvider, signInWithCredential } from 'firebase/auth';
-import { doc, setDoc, getDoc, serverTimestamp } from 'firebase/firestore';
-import { auth, db, testFirebaseConnection } from '../../services/firebase';
+import { createUserWithEmailAndPassword, updateProfile, sendEmailVerification } from 'firebase/auth';
+import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { Ionicons } from '@expo/vector-icons';
+import { auth, db } from '../../services/firebase';
+import { signInWithGoogle, GoogleSignInCancelled } from '../../services/googleAuth';
 import { VisualCaptcha } from '../../components/Captcha';
-let GoogleSignin: any = null;
-let statusCodes: any = null;
+import { Button, Field } from '../../components/ui';
+import { useColors } from '../../hooks/useTheme';
+import { friendlyAuthError, isAllowedEmail } from '../../utils/format';
+import { ALLOWED_EMAIL_DOMAINS, PRIVACY_POLICY_URL } from '../../constants/config';
 
-try {
-  const gSignIn = require('@react-native-google-signin/google-signin');
-  GoogleSignin = gSignIn.GoogleSignin;
-  statusCodes = gSignIn.statusCodes;
-
-  GoogleSignin.configure({
-    webClientId: '145937489025-r4uuaugq8pj9md58s9ppqthq4sin7vv0.apps.googleusercontent.com',
-  });
-} catch (e) {
-  console.warn("Google Signin Native Module not found. Running in Expo Go?");
-}
+// Admin accounts are never self-assigned. Promote users from the Admin dashboard,
+// or set role: "admin" on the very first account in the Firebase console.
 
 export default function RegisterScreen() {
   const router = useRouter();
+  const colors = useColors();
   const [name, setName] = useState('');
   const [studentClass, setStudentClass] = useState('');
+  const [prn, setPrn] = useState('');
   const [email, setEmail] = useState('');
-  const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [prn, setPrn] = useState('');
-  const [role, setRole] = useState<'user' | 'admin'>('user');
   const [acceptedTerms, setAcceptedTerms] = useState(false);
   const [isVerified, setIsVerified] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState<'email' | 'google' | null>(null);
   const [showPassword, setShowPassword] = useState(false);
 
   const handleRegister = async () => {
-    if (!name || (role === 'user' && !studentClass) || !email || !password || !confirmPassword) {
-      Alert.alert('Error', 'Please fill in all required fields.');
-      return;
+    const trimmedEmail = email.trim();
+    if (!name.trim() || !studentClass.trim() || !trimmedEmail || !password) {
+      return Alert.alert('Missing details', 'Please fill in your name, class, email and password.');
     }
+    if (!/^\S+@\S+\.\S+$/.test(trimmedEmail)) return Alert.alert('Invalid email', 'Please enter a valid email address.');
+    if (!isAllowedEmail(trimmedEmail, ALLOWED_EMAIL_DOMAINS)) {
+      return Alert.alert('Campus email required', `Please sign up with your campus email (${ALLOWED_EMAIL_DOMAINS.join(', ')}).`);
+    }
+    if (password.length < 8) return Alert.alert('Weak password', 'Use at least 8 characters.');
+    if (password !== confirmPassword) return Alert.alert('Passwords differ', 'The two passwords do not match.');
+    if (!acceptedTerms) return Alert.alert('Terms', 'Please accept the Terms & Privacy Policy.');
+    if (!isVerified) return Alert.alert('Verification', 'Please complete the human check.');
 
-    if (password !== confirmPassword) {
-      Alert.alert('Error', 'Passwords do not match.');
-      return;
-    }
-
-    if (!acceptedTerms) {
-      Alert.alert('Error', 'Please accept the Terms and Conditions.');
-      return;
-    }
-
-    if (!isVerified) {
-      Alert.alert('Error', 'Please complete the verification slide.');
-      return;
-    }
-    
+    setLoading('email');
     try {
-      setLoading(true);
-      const userCredential = await createUserWithEmailAndPassword(auth, email.trim(), password);
-      const user = userCredential.user;
-
+      const { user } = await createUserWithEmailAndPassword(auth, trimmedEmail, password);
       await updateProfile(user, { displayName: name.trim() });
-
-      const userData: any = {
+      await setDoc(doc(db, 'users', user.uid), {
         name: name.trim(),
-        email: email.trim(),
-        phone: phone.trim(),
-        role: role,
+        email: trimmedEmail,
+        studentClass: studentClass.trim(),
+        ...(prn.trim() ? { prn: prn.trim() } : {}),
+        role: 'user',
         status: 'active',
-        createdAt: serverTimestamp()
-      };
-      
-      if (role === 'user') {
-        userData.studentClass = studentClass.trim();
-        if (prn) userData.prn = prn.trim();
-      }
-
-      await setDoc(doc(db, 'users', user.uid), userData);
-    } catch (error: any) {
-      Alert.alert('Registration Failed', error.message);
+        createdAt: serverTimestamp(),
+      });
+      sendEmailVerification(user).catch(() => {});
+    } catch (error) {
+      Alert.alert('Sign-up failed', friendlyAuthError(error));
     } finally {
-      setLoading(false);
+      setLoading(null);
     }
   };
 
-  const handleGoogleLogin = async () => {
-    if (!acceptedTerms) {
-      Alert.alert('Required', 'Please agree to the Terms & Conditions before registering with Google.');
-      return;
-    }
-
-    if (!GoogleSignin) {
-      Alert.alert('Development Mode', 'Google Sign-In requires a custom dev client. Please run using eas build or npx expo run:android, as it leverages native OS modules unavailable in Expo Go.');
-      return;
-    }
-
+  const handleGoogle = async () => {
+    if (!acceptedTerms) return Alert.alert('Terms', 'Please accept the Terms & Privacy Policy first.');
+    setLoading('google');
     try {
-      setLoading(true);
-      await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
-      const userInfo = await GoogleSignin.signIn();
-      const idToken = userInfo.data?.idToken || userInfo.idToken;
-      
-      if (!idToken) throw new Error("No ID Token found");
-
-      const credential = GoogleAuthProvider.credential(idToken);
-      const userCredential = await signInWithCredential(auth, credential);
-
-      const userDocRef = doc(db, 'users', userCredential.user.uid);
-      const docSnap = await getDoc(userDocRef);
-      if (!docSnap.exists()) {
-        const newUserData: any = {
-          name: userCredential.user.displayName || 'Google User',
-          email: userCredential.user.email || '',
-          role: role, 
-          status: 'active',
-          createdAt: serverTimestamp()
-        };
-        
-        if (role === 'user') {
-          newUserData.studentClass = studentClass.trim() || 'Student'; 
-          if (prn) newUserData.prn = prn.trim();
-        }
-
-        await setDoc(userDocRef, newUserData);
-      }
+      await signInWithGoogle({
+        ...(studentClass.trim() ? { studentClass: studentClass.trim() } : {}),
+        ...(prn.trim() ? { prn: prn.trim() } : {}),
+      });
     } catch (error: any) {
-      if (error.code === statusCodes.SIGN_IN_CANCELLED) {
-        return;
-      } else if (error.code === statusCodes.IN_PROGRESS) {
-        // operation already in progress
-      } else if (error.code === statusCodes.PLAY_SERVICES_NOT_AVAILABLE) {
-        Alert.alert('Error', 'Google Play Services not available or outdated.');
-      } else {
-        console.error("Google Signin Error: ", error);
-        Alert.alert('Google Sign-In Failed', error.message || 'An unknown error occurred');
-      }
+      if (!(error instanceof GoogleSignInCancelled)) Alert.alert('Google sign-in failed', friendlyAuthError(error));
     } finally {
-      setLoading(false);
+      setLoading(null);
     }
   };
 
   return (
-    <ScrollView 
-      className="flex-1 bg-background dark:bg-background-dark" 
-      contentContainerStyle={{ flexGrow: 1, padding: 24 }}
-      showsVerticalScrollIndicator={false}
-    >
-      <View className="items-center mb-8 pt-6">
-        <Image 
-          source={require('../../assets/images/logo.png')} 
-          style={{ width: 100, height: 100 }}
-          resizeMode="contain"
-        />
-        <Text className="text-3xl font-extrabold text-text dark:text-text-dark mt-4">Join Us</Text>
-        <Text className="text-textLight dark:text-textLight-dark text-center mt-2 px-4">
-          The most reliable way to find what you've lost on campus.
-        </Text>
-      </View>
+    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} className="flex-1 bg-background dark:bg-background-dark">
+      <ScrollView contentContainerStyle={{ flexGrow: 1, padding: 24 }} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+        <View className="items-center mb-6 pt-6">
+          <Image source={require('../../assets/images/logo.png')} style={{ width: 80, height: 80 }} resizeMode="contain" />
+          <Text className="text-3xl font-extrabold text-text dark:text-text-dark mt-3">Join your campus</Text>
+          <Text className="text-textLight dark:text-textLight-dark text-center mt-1 px-4">
+            Lost something? Found something? Your campus has your back.
+          </Text>
+        </View>
 
-      <View className="bg-surface dark:bg-surface-dark p-6 rounded-[32px] shadow-xl border border-gray-100 dark:border-gray-800">
-        <Text className="text-xl font-bold text-text dark:text-text-dark mb-6">Create your account</Text>
-        
-        <View className="space-y-4 gap-4">
-          <TextInput
-            className="bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-2xl px-5 py-4 text-text dark:text-text-dark text-base"
-            placeholder="Full Name"
-            placeholderTextColor="#9CA3AF"
-            value={name}
-            onChangeText={setName}
-          />
-
-          {role === 'user' && (
-            <>
-              <TextInput
-                className="bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-2xl px-5 py-4 text-text dark:text-text-dark text-base"
-                placeholder="Class or Department (e.g. AIML / Faculty)"
-                placeholderTextColor="#9CA3AF"
-                value={studentClass}
-                onChangeText={setStudentClass}
-              />
-              <TextInput
-                className="bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-2xl px-5 py-4 text-text dark:text-text-dark text-base"
-                placeholder="PRN / Employee ID (Optional)"
-                placeholderTextColor="#9CA3AF"
-                value={prn}
-                onChangeText={setPrn}
-              />
-            </>
-          )}
-
-          <TextInput
-            className="bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-2xl px-5 py-4 text-text dark:text-text-dark text-base"
-            placeholder="Campus Email"
-            placeholderTextColor="#9CA3AF"
+        <View className="bg-surface dark:bg-surface-dark p-6 rounded-3xl border border-line dark:border-line-dark">
+          <Field placeholder="Full name" value={name} onChangeText={setName} maxLength={60} autoComplete="name" />
+          <Field placeholder="Class / Department (e.g. TY AIML)" value={studentClass} onChangeText={setStudentClass} maxLength={60} />
+          <Field placeholder="PRN / Employee ID (optional)" value={prn} onChangeText={setPrn} maxLength={30} autoCapitalize="characters" />
+          <Field
+            placeholder="Campus email"
             value={email}
             onChangeText={setEmail}
             autoCapitalize="none"
             keyboardType="email-address"
+            autoComplete="email"
+            hint={ALLOWED_EMAIL_DOMAINS.length ? `Must end with @${ALLOWED_EMAIL_DOMAINS[0]}` : undefined}
           />
-
-          <View className="relative">
-            <TextInput
-              className="bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-2xl px-5 py-4 text-text dark:text-text-dark text-base"
-              placeholder="Password"
-              placeholderTextColor="#9CA3AF"
-              value={password}
-              onChangeText={setPassword}
-              secureTextEntry={!showPassword}
-            />
-            <TouchableOpacity 
-              onPress={() => setShowPassword(!showPassword)}
-              className="absolute right-5 top-4"
-            >
-              <Ionicons name={showPassword ? "eye-off" : "eye"} size={22} color="#9CA3AF" />
+          <View>
+            <Field placeholder="Password (min 8 characters)" value={password} onChangeText={setPassword} secureTextEntry={!showPassword} style={{ paddingRight: 48 }} />
+            <TouchableOpacity onPress={() => setShowPassword(v => !v)} className="absolute right-4 top-3.5" hitSlop={10}>
+              <Ionicons name={showPassword ? 'eye-off-outline' : 'eye-outline'} size={22} color={colors.textLight} />
             </TouchableOpacity>
           </View>
+          <Field placeholder="Confirm password" value={confirmPassword} onChangeText={setConfirmPassword} secureTextEntry={!showPassword} />
 
-          <TextInput
-            className="bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-2xl px-5 py-4 text-text dark:text-text-dark text-base"
-            placeholder="Confirm Password"
-            placeholderTextColor="#9CA3AF"
-            value={confirmPassword}
-            onChangeText={setConfirmPassword}
-            secureTextEntry={!showPassword}
-          />
-
-          <View className="bg-gray-50 dark:bg-gray-900 p-4 rounded-2xl border border-gray-200 dark:border-gray-700">
-            <Text className="text-sm font-bold text-textLight dark:text-textLight-dark mb-3 uppercase tracking-wider">Account Type</Text>
-            <View className="flex-row">
-              <TouchableOpacity 
-                onPress={() => setRole('user')}
-                className={`flex-1 py-3 items-center rounded-xl mr-2 ${role === 'user' ? 'bg-primary' : 'bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700'}`}
-              >
-                <Text className={`font-bold py-1 ${role === 'user' ? 'text-white' : 'text-textLight dark:text-textLight-dark'}`}>Standard User</Text>
-              </TouchableOpacity>
-              <TouchableOpacity 
-                onPress={() => setRole('admin')}
-                className={`flex-1 py-3 items-center rounded-xl ml-2 ${role === 'admin' ? 'bg-accent' : 'bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700'}`}
-              >
-                <Text className={`font-bold py-1 ${role === 'admin' ? 'text-white' : 'text-textLight dark:text-textLight-dark'}`}>Administrator</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-
-          <View className="flex-row items-center px-1 my-2">
-            <Switch
-              value={acceptedTerms}
-              onValueChange={setAcceptedTerms}
-              trackColor={{ false: '#D1D5DB', true: '#6366F1' }}
-              thumbColor={acceptedTerms ? '#fff' : '#f4f3f4'}
-            />
+          <View className="flex-row items-center mb-4">
+            <Switch value={acceptedTerms} onValueChange={setAcceptedTerms} trackColor={{ false: colors.line, true: colors.primary }} thumbColor="#fff" />
             <Text className="text-textLight dark:text-textLight-dark ml-2 text-sm flex-1">
-              I agree to the <Text className="text-primary font-bold">Terms & Conditions</Text>
+              I agree to the{' '}
+              <Text className="text-primary dark:text-primary-dark font-bold" onPress={() => Linking.openURL(PRIVACY_POLICY_URL)}>Terms & Privacy Policy</Text>
             </Text>
           </View>
 
-          <View className="items-center my-2">
+          <View className="mb-5">
             <VisualCaptcha onVerify={setIsVerified} />
           </View>
 
-          <TouchableOpacity 
-            className={`py-4 rounded-2xl items-center flex-row justify-center mt-2 shadow-lg shadow-primary/30 ${loading ? 'bg-primary/70' : 'bg-primary'}`}
-            onPress={handleRegister}
-            disabled={loading}
-          >
-            {loading ? (
-               <ActivityIndicator color="#fff" />
-            ) : (
-               <>
-                <Text className="text-white font-extrabold text-lg mr-2">Create Account</Text>
-                <Ionicons name="arrow-forward" size={20} color="white" />
-               </>
-            )}
-          </TouchableOpacity>
+          <Button title="Create account" icon="arrow-forward" onPress={handleRegister} loading={loading === 'email'} disabled={!!loading} />
 
-          <View className="flex-row items-center my-4">
-            <View className="flex-1 h-[1px] bg-gray-200 dark:bg-gray-700" />
-            <Text className="mx-4 text-textLight dark:text-textLight-dark font-bold text-xs uppercase">OR</Text>
-            <View className="flex-1 h-[1px] bg-gray-200 dark:bg-gray-700" />
+          <View className="flex-row items-center my-5">
+            <View className="flex-1 h-px bg-line dark:bg-line-dark" />
+            <Text className="mx-3 text-textLight dark:text-textLight-dark text-xs font-bold">OR</Text>
+            <View className="flex-1 h-px bg-line dark:bg-line-dark" />
           </View>
 
-          <TouchableOpacity 
-            className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 py-4 rounded-2xl items-center flex-row justify-center"
-            onPress={handleGoogleLogin}
+          <TouchableOpacity
+            className={`bg-surface dark:bg-muted-dark border border-line dark:border-line-dark py-4 rounded-2xl items-center flex-row justify-center ${loading ? 'opacity-60' : ''}`}
+            onPress={handleGoogle}
+            disabled={!!loading}
           >
-            <Image source={{ uri: 'https://cdn-icons-png.flaticon.com/512/2991/2991148.png' }} style={{ width: 20, height: 20 }} />
-            <Text className="text-text dark:text-text-dark font-bold ml-3 text-base">Continue with Google</Text>
+            <Ionicons name="logo-google" size={20} color="#EA4335" />
+            <Text className="text-text dark:text-text-dark font-bold ml-3 text-base">
+              {loading === 'google' ? 'Signing in…' : 'Sign up with Google'}
+            </Text>
           </TouchableOpacity>
-        </View>
 
-        <View className="flex-row justify-center mt-8">
-          <Text className="text-textLight dark:text-textLight-dark">Already part of the community? </Text>
-          <TouchableOpacity onPress={() => router.push('/(auth)/login')}>
-            <Text className="text-primary font-bold">Sign In</Text>
-          </TouchableOpacity>
+          <View className="flex-row justify-center mt-6">
+            <Text className="text-textLight dark:text-textLight-dark">Already have an account? </Text>
+            <TouchableOpacity onPress={() => router.back()}>
+              <Text className="text-primary dark:text-primary-dark font-bold">Log in</Text>
+            </TouchableOpacity>
+          </View>
         </View>
-      </View>
-      <View className="h-10" />
-    </ScrollView>
+        <View className="h-10" />
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
-

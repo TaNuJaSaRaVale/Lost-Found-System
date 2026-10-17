@@ -1,4 +1,5 @@
 /** @type {import('tailwindcss').Config} */
+// Keep these values in sync with constants/colors.ts (used for icons, tab bar, etc.)
 module.exports = {
   content: ["./app/**/*.{js,jsx,ts,tsx}", "./components/**/*.{js,jsx,ts,tsx}"],
   presets: [require("nativewind/preset")],
@@ -7,35 +8,47 @@ module.exports = {
     extend: {
       colors: {
         primary: {
-          DEFAULT: "#6366F1", // Indigo 500
-          dark: "#818CF8", // Indigo 400
+          DEFAULT: "#4F46E5", // Indigo 600 - brand / "lost"
+          dark: "#818CF8",
         },
         secondary: {
-          DEFAULT: "#10B981", // Emerald 500
-          dark: "#34D399", // Emerald 400
+          DEFAULT: "#059669", // Emerald 600 - "found" / success
+          dark: "#34D399",
         },
         accent: {
-          DEFAULT: "#F59E0B", // Amber 500
-          dark: "#FBBF24", // Amber 400
+          DEFAULT: "#D97706", // Amber 600 - pending / rewards
+          dark: "#FBBF24",
+        },
+        danger: {
+          DEFAULT: "#E11D48", // Rose 600
+          dark: "#FB7185",
         },
         background: {
-          DEFAULT: "#F9FAFB", // Gray 50
-          dark: "#111827", // Gray 900
+          DEFAULT: "#F5F6FA",
+          dark: "#0B1120", // Deep navy
         },
         surface: {
           DEFAULT: "#FFFFFF",
-          dark: "#1F2937", // Gray 800
+          dark: "#151C2F",
+        },
+        muted: {
+          DEFAULT: "#F1F3F9", // Inputs, inset panels
+          dark: "#1C2438",
+        },
+        line: {
+          DEFAULT: "#E4E7F0", // Borders & dividers
+          dark: "#263049",
         },
         text: {
-          DEFAULT: "#111827",
-          dark: "#F9FAFB",
+          DEFAULT: "#0F172A",
+          dark: "#E8ECF6",
         },
         textLight: {
-          DEFAULT: "#6B7280",
-          dark: "#9CA3AF",
-        }
-      }
+          DEFAULT: "#64748B",
+          dark: "#94A3B8",
+        },
+      },
     },
   },
   plugins: [],
-}
+};

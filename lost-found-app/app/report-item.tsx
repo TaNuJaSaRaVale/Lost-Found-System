@@ -1,206 +1,219 @@
 import { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, ScrollView, Alert, ActivityIndicator, Image } from 'react-native';
-import { useLocalSearchParams, useRouter } from 'expo-router';
-import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
-import { db, auth } from '../services/firebase';
+import { View, Text, TouchableOpacity, ScrollView, Alert, Image, KeyboardAvoidingView, Platform, ActivityIndicator } from 'react-native';
+import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
-import * as ImageManipulator from 'expo-image-manipulator';
 import { Ionicons } from '@expo/vector-icons';
+import { useAuth } from '../context/AuthContext';
+import { useColors } from '../hooks/useTheme';
+import { createItem, processImage, ProcessedImage } from '../services/items';
+import { CAMPUS_LOCATIONS, CATEGORIES, LIMITS } from '../constants/config';
+import { Button, Chip, Field } from '../components/ui';
+
+const DAY_OPTIONS = [
+  { label: 'Today', daysAgo: 0 },
+  { label: 'Yesterday', daysAgo: 1 },
+  { label: '2–3 days ago', daysAgo: 2 },
+  { label: 'This week', daysAgo: 5 },
+  { label: 'Earlier', daysAgo: 14 },
+];
+
+function dateForDaysAgo(daysAgo: number) {
+  const d = new Date();
+  d.setHours(12, 0, 0, 0);
+  d.setDate(d.getDate() - daysAgo);
+  return d.toISOString();
+}
 
 export default function ReportItemScreen() {
   const router = useRouter();
-  const { type } = useLocalSearchParams(); 
-  
+  const colors = useColors();
+  const { user, profile } = useAuth();
+  const { type } = useLocalSearchParams<{ type: string }>();
+  const isLost = type !== 'found';
+
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [category, setCategory] = useState('');
+  const [category, setCategory] = useState<string | null>(null);
   const [location, setLocation] = useState('');
+  const [daysAgo, setDaysAgo] = useState<number | null>(0);
+  const [eventTime, setEventTime] = useState('');
   const [reward, setReward] = useState('');
-  const [dateTime, setDateTime] = useState('');
-  const [image, setImage] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [currentlyAt, setCurrentlyAt] = useState('');
+  const [image, setImage] = useState<ProcessedImage | null>(null);
+  const [processingImage, setProcessingImage] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
-  const pickImage = async () => {
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsEditing: true,
-      aspect: [4, 3],
-      quality: 1,
-    });
-
-    if (!result.canceled) {
-      setLoading(true);
-      try {
-        const manipResult = await ImageManipulator.manipulateAsync(
-          result.assets[0].uri,
-          [{ resize: { width: 600 } }],
-          { compress: 0.5, format: ImageManipulator.SaveFormat.JPEG, base64: true }
-        );
-        const base64Image = `data:image/jpeg;base64,${manipResult.base64}`;
-        setImage(base64Image);
-      } catch (error) {
-        Alert.alert('Error', 'Failed to process image.');
-      } finally {
-        setLoading(false);
-      }
+  const handlePicked = async (result: ImagePicker.ImagePickerResult) => {
+    if (result.canceled || !result.assets?.[0]) return;
+    setProcessingImage(true);
+    try {
+      setImage(await processImage(result.assets[0].uri));
+    } catch {
+      Alert.alert('Photo error', 'We could not process that photo. Please try another one.');
+    } finally {
+      setProcessingImage(false);
     }
   };
 
+  const takePhoto = async () => {
+    const perm = await ImagePicker.requestCameraPermissionsAsync();
+    if (!perm.granted) {
+      Alert.alert('Camera access needed', 'Allow camera access in Settings to take a photo.');
+      return;
+    }
+    handlePicked(await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], allowsEditing: true, aspect: [4, 3], quality: 0.8 }));
+  };
+
+  const pickFromGallery = async () => {
+    handlePicked(await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsEditing: true, aspect: [4, 3], quality: 0.8 }));
+  };
+
   const handleSubmit = async () => {
-    if (!title || !category || !location || !dateTime) {
-      Alert.alert('Error', 'Please fill the required fields.');
+    const missing = [
+      !title.trim() && 'a title',
+      !category && 'a category',
+      !location.trim() && 'a location',
+      daysAgo === null && 'when it happened',
+    ].filter(Boolean);
+    if (missing.length) {
+      Alert.alert('Almost there', `Please add ${missing.join(', ')}.`);
+      return;
+    }
+    if (!user) return;
+    if (profile?.status === 'blocked') {
+      Alert.alert('Account suspended', 'Your account cannot post new reports.');
       return;
     }
 
+    setSubmitting(true);
     try {
-      setLoading(true);
-      const collectionName = type === 'lost' ? 'lost_items' : 'found_items';
-      
-      const itemData: any = {
+      const data: Record<string, any> = {
         title: title.trim(),
         description: description.trim(),
-        category: category.trim(),
+        category,
         location: location.trim(),
-        dateTime: dateTime.trim(),
-        imageUrl: image || '', 
-        userId: auth.currentUser?.uid,
-        status: 'open',
-        dateReported: new Date().toISOString(),
-        createdAt: serverTimestamp()
+        eventDate: dateForDaysAgo(daysAgo!),
+        eventTime: eventTime.trim(),
+        userId: user.uid,
+        userName: profile?.name || user.displayName || 'Student',
       };
+      if (isLost) data.reward = reward.trim();
+      else data.currentlyAt = currentlyAt.trim();
 
-      if (type === 'lost') {
-        itemData.reward = reward.trim();
-        itemData.dateLost = dateTime.trim();
-      } else {
-        itemData.dateFound = dateTime.trim();
-      }
-      
-      await addDoc(collection(db, collectionName), itemData);
-      Alert.alert('Success 🎉', `Your ${type} report has been published.`);
-      router.replace(`/(tabs)/${type === 'lost' ? 'home' : 'found'}`);
-
+      const id = await createItem(isLost ? 'lost_items' : 'found_items', data, image);
+      router.replace({ pathname: '/item/[id]', params: { id, type: isLost ? 'lost_items' : 'found_items', justPosted: '1' } });
     } catch (error: any) {
-      Alert.alert('Error', error.message);
+      const offline = error?.code === 'unavailable';
+      Alert.alert('Could not publish', offline ? 'You appear to be offline. Please try again when connected.' : error.message);
     } finally {
-      setLoading(false);
+      setSubmitting(false);
     }
   };
 
   return (
-    <ScrollView className="flex-1 bg-background dark:bg-background-dark" showsVerticalScrollIndicator={false}>
-      <View className="p-8 pt-12">
-        <TouchableOpacity 
-          onPress={() => router.back()} 
-          className="bg-gray-100 dark:bg-gray-800 self-start p-3 rounded-2xl mb-8"
-        >
-          <Ionicons name="arrow-back" size={24} color="#6366F1" />
-        </TouchableOpacity>
-
-        <Text className="text-4xl font-extrabold text-text dark:text-text-dark mb-2">
-          New {type === 'lost' ? 'Lost' : 'Found'} Report
-        </Text>
-        <Text className="text-textLight dark:text-textLight-dark text-base mb-8">
-          Provide as much detail as possible to help the community.
-        </Text>
-
-        <View className="bg-surface dark:bg-surface-dark p-8 rounded-[40px] shadow-2xl border border-gray-100 dark:border-gray-800 mb-20">
-          <Text className="text-xs font-bold text-textLight dark:text-textLight-dark uppercase tracking-widest mb-3">Core Information</Text>
-          
-          <TextInput 
-            className="bg-gray-50 dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-2xl px-5 py-4 mb-4 text-text dark:text-text-dark text-base font-medium"
-            placeholder="Item Title (e.g. Red Backpack)"
-            placeholderTextColor="#9CA3AF"
-            value={title}
-            onChangeText={setTitle}
-          />
-
-          <TextInput 
-            className="bg-gray-50 dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-2xl px-5 py-4 mb-4 text-text dark:text-text-dark text-base"
-            placeholder="Category (e.g. Wallet, Electronics)"
-            placeholderTextColor="#9CA3AF"
-            value={category}
-            onChangeText={setCategory}
-          />
-
-          <TextInput 
-            className="bg-gray-50 dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-2xl px-5 py-4 mb-6 text-text dark:text-text-dark text-base"
-            placeholder={type === 'lost' ? 'Last known location?' : 'Where was it found?'}
-            placeholderTextColor="#9CA3AF"
-            value={location}
-            onChangeText={setLocation}
-          />
-
-          <View className="flex-row justify-between mb-6">
-            <View className="flex-1 mr-2">
-              <Text className="text-xs font-bold text-textLight dark:text-textLight-dark uppercase tracking-widest mb-3">When</Text>
-              <TextInput 
-                className="bg-gray-50 dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-2xl px-5 py-4 text-text dark:text-text-dark text-base"
-                placeholder="Time/Date"
-                placeholderTextColor="#9CA3AF"
-                value={dateTime}
-                onChangeText={setDateTime}
-              />
-            </View>
-            
-            {type === 'lost' && (
-              <View className="flex-1 ml-2">
-                <Text className="text-xs font-bold text-textLight dark:text-textLight-dark uppercase tracking-widest mb-3">Gratitude</Text>
-                <TextInput 
-                  className="bg-gray-50 dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-2xl px-5 py-4 text-text dark:text-text-dark text-base"
-                  placeholder="Reward?"
-                  placeholderTextColor="#9CA3AF"
-                  value={reward}
-                  onChangeText={setReward}
-                />
+    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} className="flex-1 bg-background dark:bg-background-dark">
+      <Stack.Screen options={{ title: isLost ? 'Report lost item' : 'Report found item' }} />
+      <ScrollView contentContainerStyle={{ padding: 20, paddingBottom: 60 }} keyboardShouldPersistTaps="handled">
+        {/* Photo */}
+        <View className="mb-6">
+          <View className="bg-muted dark:bg-muted-dark border-2 border-dashed border-line dark:border-line-dark rounded-3xl h-52 overflow-hidden items-center justify-center">
+            {processingImage ? (
+              <ActivityIndicator color={colors.primary} />
+            ) : image ? (
+              <>
+                <Image source={{ uri: image.full }} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
+                <TouchableOpacity onPress={() => setImage(null)} className="absolute top-3 right-3 bg-black/50 p-2 rounded-full">
+                  <Ionicons name="close" size={18} color="white" />
+                </TouchableOpacity>
+              </>
+            ) : (
+              <View className="items-center px-6">
+                <Ionicons name="image-outline" size={36} color={colors.textLight} />
+                <Text className="text-textLight dark:text-textLight-dark mt-2 text-center">
+                  Add a clear photo so people can recognise it at a glance
+                </Text>
               </View>
             )}
           </View>
-
-          <Text className="text-xs font-bold text-textLight dark:text-textLight-dark uppercase tracking-widest mb-3">Distinguishing Features</Text>
-          <TextInput 
-            className="bg-gray-50 dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-2xl px-5 py-4 mb-8 min-h-[140px] text-text dark:text-text-dark text-base"
-            placeholder="Describe unique marks, contents, or condition..."
-            placeholderTextColor="#9CA3AF"
-            value={description}
-            onChangeText={setDescription}
-            multiline
-            textAlignVertical="top"
-          />
-
-          <Text className="text-xs font-bold text-textLight dark:text-textLight-dark uppercase tracking-widest mb-3">Visual Evidence</Text>
-          <TouchableOpacity 
-            onPress={pickImage}
-            className="bg-gray-50 dark:bg-gray-900 border-2 border-dashed border-gray-200 dark:border-gray-800 rounded-[32px] h-56 mb-10 overflow-hidden items-center justify-center shadow-inner"
-          >
-            {image ? (
-              <Image source={{ uri: image }} className="w-full h-full" resizeMode="cover" />
-            ) : (
-              <View className="items-center">
-                <View className="bg-primary/10 p-5 rounded-full mb-3">
-                  <Ionicons name="camera" size={32} color="#6366F1" />
-                </View>
-                <Text className="text-textLight dark:text-textLight-dark font-bold">Pick a Clear Photo</Text>
-              </View>
-            )}
-          </TouchableOpacity>
-
-          <TouchableOpacity 
-            className={`py-5 rounded-[24px] items-center flex-row justify-center shadow-2xl shadow-primary/40 ${type === 'lost' ? 'bg-primary' : 'bg-secondary'}`}
-            onPress={handleSubmit}
-            disabled={loading}
-          >
-            {loading ? (
-               <ActivityIndicator color="#fff" />
-            ) : (
-               <>
-                <Text className="text-white font-extrabold text-xl mr-3">Publish Report</Text>
-                <Ionicons name="rocket-outline" size={24} color="white" />
-               </>
-            )}
-          </TouchableOpacity>
+          <View className="flex-row mt-3 gap-3">
+            <View className="flex-1"><Button title="Camera" icon="camera-outline" variant="ghost" onPress={takePhoto} /></View>
+            <View className="flex-1"><Button title="Gallery" icon="images-outline" variant="ghost" onPress={pickFromGallery} /></View>
+          </View>
         </View>
-      </View>
-    </ScrollView>
+
+        <Field
+          label="What is it? *"
+          placeholder={isLost ? 'e.g. Black HP laptop charger' : 'e.g. Blue water bottle with stickers'}
+          value={title}
+          onChangeText={setTitle}
+          maxLength={LIMITS.title}
+        />
+
+        <Text className="text-xs font-bold text-textLight dark:text-textLight-dark uppercase tracking-wider mb-2">Category *</Text>
+        <View className="flex-row flex-wrap mb-4">
+          {CATEGORIES.map(c => (
+            <Chip key={c.id} label={c.label} icon={c.icon} active={category === c.id} onPress={() => setCategory(c.id)} />
+          ))}
+        </View>
+
+        <Field
+          label={isLost ? 'Where did you lose it? *' : 'Where did you find it? *'}
+          placeholder="e.g. 2nd floor, Library reading hall"
+          value={location}
+          onChangeText={setLocation}
+          maxLength={LIMITS.location}
+        />
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} className="-mt-2 mb-4" keyboardShouldPersistTaps="handled">
+          {CAMPUS_LOCATIONS.map(l => (
+            <Chip key={l} label={l} active={location === l} onPress={() => setLocation(l)} />
+          ))}
+        </ScrollView>
+
+        <Text className="text-xs font-bold text-textLight dark:text-textLight-dark uppercase tracking-wider mb-2">When? *</Text>
+        <View className="flex-row flex-wrap mb-2">
+          {DAY_OPTIONS.map(o => (
+            <Chip key={o.label} label={o.label} active={daysAgo === o.daysAgo} onPress={() => setDaysAgo(o.daysAgo)} />
+          ))}
+        </View>
+        <Field placeholder="Approx. time (optional), e.g. around 2 PM" value={eventTime} onChangeText={setEventTime} maxLength={30} />
+
+        <Field
+          label="Details"
+          placeholder={isLost
+            ? 'Colour, brand, stickers, contents… (keep one secret detail to verify finders)'
+            : 'Condition, brand, anything notable… (don\'t reveal everything — let the owner prove it)'}
+          value={description}
+          onChangeText={setDescription}
+          maxLength={LIMITS.description}
+          multiline
+          textAlignVertical="top"
+          style={{ minHeight: 110 }}
+        />
+
+        {isLost ? (
+          <Field label="Reward (optional)" placeholder="e.g. ₹200 or a treat at the canteen" value={reward} onChangeText={setReward} maxLength={LIMITS.reward} />
+        ) : (
+          <Field
+            label="Currently kept at (optional)"
+            placeholder="e.g. Security desk, Main gate"
+            value={currentlyAt}
+            onChangeText={setCurrentlyAt}
+            maxLength={LIMITS.location}
+            hint="Handing valuables to security keeps everyone safe."
+          />
+        )}
+
+        <View className="mt-2">
+          <Button
+            title="Publish report"
+            icon="paper-plane-outline"
+            variant={isLost ? 'primary' : 'secondary'}
+            onPress={handleSubmit}
+            loading={submitting}
+            disabled={processingImage}
+          />
+        </View>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
