@@ -17,7 +17,14 @@ The **Campus Lost & Found System** is a robust mobile application built with **R
 - **Real-Time Communication**: Built-in chat system allowing secure, real-time negotiation between item owners and finders.
 - **Admin Moderation Dashboard**: A unified control center for administrators to manage users (suspend/warn), moderate item listings, and review user reports.
 - **Offline Resilience**: Architected with offline-first capabilities. Users can browse cached items and their profiles without internet access, and the app gracefully handles network drops without crashing.
-- **Modern, Responsive UI**: Uses NativeWind (Tailwind CSS for React Native) to provide a fluid, accessible, and beautiful user experience across both iOS and Android.
+- **Modern, Responsive UI**: Uses NativeWind (Tailwind CSS for React Native) with a consistent indigo / emerald design system and a deep-navy dark mode (Light / Dark / System).
+- **Fair Claim Workflow**: Multiple people can claim an item; the reporter reviews proofs inline, approves one (others are auto-declined), then confirms the handover. Claimants can withdraw or resubmit.
+- **Push Notifications**: Alerts for new matches, new claims, claim decisions and chat messages (Cloud Functions + Expo Push), with tap-to-open deep links.
+- **Fast Feeds**: Paginated Lost / Found feeds with thumbnails, category and status filters, search and "only mine". Full-size photos load only on the detail screen.
+- **Smart Reporting**: Category picker, campus location quick-picks, date chips, camera or gallery photos, rewards and "currently kept at" for found items.
+- **Share Anywhere**: Share any report to WhatsApp/Instagram groups with one tap.
+- **Account Control**: Forgot password, email verification, optional campus-email restriction, and in-app account deletion (Google Play requirement).
+- **Tested Security Rules**: 68 emulator tests cover the claim state machine, chat privacy, admin safeguards and abuse cases (`firestore-tests/`).
 
 ---
 
@@ -35,7 +42,7 @@ Building a public-facing community platform requires strict attention to abuse v
 
 ### 3. Administrative Deadlocks
 **The Loophole:** Admins could accidentally (or maliciously) demote or block their own accounts, potentially leaving the platform entirely unmoderated if they were the only administrator.
-**The Fix:** Built-in safeguards at the database query level in the Admin Dashboard prevent self-blocking and self-demotion, preserving platform integrity.
+**The Fix:** Firestore security rules reject any change an admin makes to their own role or status, and roles can never be self-assigned at sign-up. Admins are promoted only by another admin.
 
 ### 4. Premature Cache Lockouts
 **The Loophole:** Due to Firebase's aggressive local caching, an active user might open the app while offline and trigger an outdated local cache that incorrectly labeled their account as "blocked" from a previous session, locking them out of the app.
@@ -73,5 +80,17 @@ Building a public-facing community platform requires strict attention to abuse v
    ```bash
    npx expo start
    ```
+
+4. **Deploy the backend (required for v2):**
+   ```bash
+   firebase deploy --only firestore:rules,firestore:indexes
+   cd functions && npm install && cd .. && firebase deploy --only functions   # needs the Blaze plan
+   ```
+5. **Run the security-rule tests** (needs Java 11+):
+   ```bash
+   cd firestore-tests && npm install && npm test
+   ```
+
+See **[LAUNCH_GUIDE.md](LAUNCH_GUIDE.md)** for publishing on Google Play, scaling, and monetization, and **[PRIVACY.md](PRIVACY.md)** for the privacy policy template.
 
 *Note: Google Sign-In requires native module linking. To test full authentication flows, use an EAS Development Client or run `npx expo run:android` / `npx expo run:ios`.*
