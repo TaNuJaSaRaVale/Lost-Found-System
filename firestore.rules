@@ -192,6 +192,16 @@ service cloud.firestore {
     }
 
     // Written only by Cloud Functions (Admin SDK bypasses these rules).
+    // Expo push tokens, readable by signed-in users so the app can notify someone directly
+    // (free Spark plan, no Cloud Functions). Only the owner can set or remove their own token.
+    match /push_tokens/{userId} {
+      allow read: if signedIn();
+      allow create, update: if signedIn() && uid() == userId
+        && request.resource.data.keys().hasOnly(['token', 'updatedAt'])
+        && str(request.resource.data.token, 10, 200);
+      allow delete: if signedIn() && uid() == userId;
+    }
+
     match /matches/{matchId} {
       allow read: if signedIn();
       allow write: if false;

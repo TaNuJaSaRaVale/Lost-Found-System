@@ -5,6 +5,7 @@ import { collection, query, where, onSnapshot, addDoc, serverTimestamp, doc, Tim
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { db } from '../../services/firebase';
+import { notifyUser } from '../../services/push';
 import { useAuth } from '../../context/AuthContext';
 import { useColors } from '../../hooks/useTheme';
 import { LIMITS } from '../../constants/config';
@@ -103,6 +104,12 @@ export default function ChatScreen() {
           hasUnread: true,
         });
       }
+      const recipient = user.uid === claim.ownerId ? claim.claimantId : claim.ownerId;
+      const senderName = user.uid === claim.ownerId ? claim.ownerName : claim.claimantName;
+      notifyUser(recipient,
+        isAdminChat ? '💬 New message' : `💬 ${senderName || 'New message'} · ${claim.itemTitle}`,
+        text.length > 120 ? `${text.slice(0, 117)}…` : text,
+        { claimId: id, screen: 'chat' });
     } catch (e: any) {
       setNewMessage(text); // Don't lose what the user typed
       Alert.alert('Not sent', e?.code === 'permission-denied' ? 'This chat is closed.' : 'Check your connection and try again.');

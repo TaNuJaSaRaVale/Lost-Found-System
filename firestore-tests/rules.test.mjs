@@ -159,6 +159,14 @@ await t('admin cascade delete of another user item', async () => {
 });
 await t('cannot delete another user item', () => assertFails(deleteDoc(doc(as('bob'), 'found_items/c1'))));
 await t('user can delete own profile (account deletion)', () => assertSucceeds(deleteDoc(doc(as('dave'), 'users/dave'))));
+console.log('Push tokens');
+await t('user saves own push token', () => assertSucceeds(setDoc(doc(as('bob'), 'push_tokens/bob'), { token: 'ExponentPushToken[abc123]', updatedAt: serverTimestamp() })));
+await t('other signed-in user can read token', () => assertSucceeds(getDoc(doc(as('alice'), 'push_tokens/bob'))));
+await t('signed-out cannot read token', () => assertFails(getDoc(doc(env.unauthenticatedContext().firestore(), 'push_tokens/bob'))));
+await t('cannot overwrite someone else token', () => assertFails(setDoc(doc(as('alice'), 'push_tokens/bob'), { token: 'ExponentPushToken[evil00]' })));
+await t('cannot add extra fields to token', () => assertFails(setDoc(doc(as('bob'), 'push_tokens/bob'), { token: 'ExponentPushToken[abc123]', role: 'admin' })));
+await t('cannot delete someone else token', () => assertFails(deleteDoc(doc(as('alice'), 'push_tokens/bob'))));
+await t('user deletes own token', () => assertSucceeds(deleteDoc(doc(as('bob'), 'push_tokens/bob'))));
 await t('clients cannot write matches', () => assertFails(setDoc(doc(as('bob'), 'matches/x'), { a: 1 })));
 
 console.log(`\n${pass} passed, ${fail} failed`);

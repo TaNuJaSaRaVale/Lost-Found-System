@@ -60,6 +60,10 @@ export async function signInWithGoogle(extraProfile: Record<string, any> = {}) {
     if (error?.code === statusCodes.PLAY_SERVICES_NOT_AVAILABLE) {
       throw new Error('Google Play Services is missing or out of date on this device.');
     }
+    // Android DEVELOPER_ERROR: this build's signing SHA-1 isn't registered in Firebase.
+    if (String(error?.code) === '10' || /DEVELOPER_ERROR/.test(String(error?.message))) {
+      throw new Error('Google Sign-In is not set up for this build yet. Add the app\'s SHA-1 fingerprint in Firebase (see LAUNCH_GUIDE.md), or use email login.');
+    }
     throw error;
   }
 }

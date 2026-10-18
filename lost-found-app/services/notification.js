@@ -2,7 +2,8 @@ import * as Device from 'expo-device';
 import * as Notifications from 'expo-notifications';
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
-import { doc, setDoc, deleteField } from 'firebase/firestore';
+import { doc, setDoc, deleteDoc, deleteField, serverTimestamp } from 'firebase/firestore';
+import { signOut } from 'firebase/auth';
 import { db, auth } from './firebase';
 
 // Show notifications as banners even when the app is in the foreground.
@@ -55,6 +56,8 @@ export async function registerForPushNotificationsAsync({ prompt = true } = {}) 
         { expoPushToken: token, notificationsEnabled: true },
         { merge: true },
       );
+      // Lets other signed-in users' apps notify this user (see services/push.ts).
+      await setDoc(doc(db, 'push_tokens', auth.currentUser.uid), { token, updatedAt: serverTimestamp() });
     } catch (error) {
       console.log('Could not save push token:', error?.message);
     }
@@ -65,9 +68,22 @@ export async function registerForPushNotificationsAsync({ prompt = true } = {}) 
 
 export async function disablePushNotifications() {
   if (!auth.currentUser) return;
+  await deleteDoc(doc(db, 'push_tokens', auth.currentUser.uid)).catch(() => {});
   await setDoc(
     doc(db, 'users', auth.currentUser.uid),
     { expoPushToken: deleteField(), notificationsEnabled: false },
     { merge: true },
   );
+}
+
+// Stop this device getting the account's notifications once someone logs out (shared phones).
+export async function forgetDeviceAndSignOut() {
+  const uid = auth.currentUser?.uid;
+  if (uid) {
+    await Promise.all([
+      deleteDoc(doc(db, 'push_tokens', uid)),
+      setDoc(doc(db, 'users', uid), { expoPushToken: deleteField() }, { merge: true }),
+    ]).catch(() => {});
+  }
+  await signOut(auth);
 }

@@ -19,7 +19,7 @@ The **Campus Lost & Found System** is a robust mobile application built with **R
 - **Offline Resilience**: Architected with offline-first capabilities. Users can browse cached items and their profiles without internet access, and the app gracefully handles network drops without crashing.
 - **Modern, Responsive UI**: Uses NativeWind (Tailwind CSS for React Native) with a consistent indigo / emerald design system and a deep-navy dark mode (Light / Dark / System).
 - **Fair Claim Workflow**: Multiple people can claim an item; the reporter reviews proofs inline, approves one (others are auto-declined), then confirms the handover. Claimants can withdraw or resubmit.
-- **Push Notifications**: Alerts for new matches, new claims, claim decisions and chat messages (Cloud Functions + Expo Push), with tap-to-open deep links.
+- **Push Notifications**: Alerts for new matches, new claims, claim decisions and chat messages (sent from the app via Expo Push, free on the Spark plan; Cloud Functions optional), with tap-to-open deep links.
 - **Fast Feeds**: Paginated Lost / Found feeds with thumbnails, category and status filters, search and "only mine". Full-size photos load only on the detail screen.
 - **Smart Reporting**: Category picker, campus location quick-picks, date chips, camera or gallery photos, rewards and "currently kept at" for found items.
 - **Share Anywhere**: Share any report to WhatsApp/Instagram groups with one tap.
@@ -84,7 +84,7 @@ Building a public-facing community platform requires strict attention to abuse v
 4. **Deploy the backend (required for v2):**
    ```bash
    firebase deploy --only firestore:rules,firestore:indexes
-   cd functions && npm install && cd .. && firebase deploy --only functions   # needs the Blaze plan
+   cd functions && npm install && cd .. && firebase deploy --only functions   # optional, needs the Blaze plan; then set PUSH_SENDER = 'functions'
    ```
 5. **Run the security-rule tests** (needs Java 11+):
    ```bash

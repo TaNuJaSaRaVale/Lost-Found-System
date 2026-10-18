@@ -16,14 +16,9 @@ firebase deploy --only firestore:rules,firestore:indexes
 
 Indexes take a few minutes to build. Until the `messages` index finishes, chats will show "Chat is being set up".
 
-**Cloud Functions (push notifications + server-side matching)** need the Firebase **Blaze** (pay-as-you-go) plan. Blaze still includes a generous free tier; a single campus typically stays within it. Set a budget alert in Google Cloud Billing (e.g. ₹500) for peace of mind.
+**Push notifications work on the free Spark plan.** The app sends them itself through Expo's free push service (`PUSH_SENDER = 'app'` in `lost-found-app/constants/config.ts`). You don't need Cloud Functions or the Blaze plan.
 
-```bash
-cd functions && npm install && cd ..
-firebase deploy --only functions
-```
-
-Without Functions the app still works fully. You just won't get push notifications.
+If you later move to Blaze, you can let Cloud Functions send them instead: deploy with `cd functions && npm install && cd .. && firebase deploy --only functions`, then set `PUSH_SENDER = 'functions'`. Otherwise everyone gets each notification twice.
 
 **Make your first admin:** Firebase Console → Firestore → `users/<your uid>` → set `role` to `admin`. After that, promote others from the in-app Admin dashboard.
 
@@ -36,6 +31,86 @@ Without Functions the app still works fully. You just won't get push notificatio
 ```bash
 cd firestore-tests && npm install && npm test   # requires Java 11+
 ```
+
+---
+
+## Test on your phone & build an APK (all free)
+
+Everything below uses free tools: Firebase Spark plan, a free Expo account, and EAS Build's free tier (a limited number of Android builds per month; builds may wait in a queue).
+
+### Option A — Quick test in Expo Go (2 minutes, some features missing)
+
+Install **Expo Go** from the Play Store, then:
+
+```bash
+cd lost-found-app
+npm install
+npx expo start          # scan the QR code with Expo Go (phone and laptop on the same Wi-Fi)
+# Different networks or college Wi-Fi blocking it? Use:  npx expo start --tunnel
+```
+
+In Expo Go, **Google Sign-In and push notifications do not work** (Expo Go doesn't include them). Everything else works: email login, reporting with photos, feeds, matches, claims, chat, profile, admin. Use Option B to test everything.
+
+### Option B — Real installable APK (everything works)
+
+**1. One-time Firebase setup (Firebase Console, free):**
+1. *Authentication → Sign-in method*: enable **Email/Password** and **Google**.
+2. *Project settings → Your apps → Add app → Android*, package name **`com.tanuja888.lostfoundapp`**. Download **`google-services.json`** and put it in `lost-found-app/`. (This is what makes Android notifications work.)
+
+**2. Build the APK on Expo's servers:**
+
+```bash
+cd lost-found-app
+npm install -g eas-cli
+eas login                                  # free account at expo.dev
+git add google-services.json && git commit -m "chore: add google-services.json"   # commit it so the build is guaranteed to include it (it only holds public config)
+eas build --platform android --profile preview
+```
+
+The first time, answer **Yes** to "Generate a new Android Keystore". The build takes about 10–20 minutes. When it finishes, the terminal shows a link and QR code. Open it on your phone, download the **.apk**, and install it (allow "Install unknown apps" for your browser). You can also download it later from expo.dev → your project → Builds.
+
+**3. Turn on Google Sign-In for this APK:**
+
+```bash
+eas credentials --platform android         # pick "preview" → copy the SHA1 fingerprint shown
+```
+
+In Firebase → *Project settings → your Android app → Add fingerprint*, paste the SHA-1 and save. You don't need to rebuild; Google Sign-In starts working within a few minutes.
+(If you skip this, tapping "Continue with Google" says Google Sign-In isn't set up yet.)
+
+**4. Turn on push notifications for this APK:**
+1. Firebase → *Project settings → Service accounts → Generate new private key* (downloads a JSON file). **Keep it private and never commit it.**
+2. Upload it to EAS:
+   ```bash
+   eas credentials --platform android
+   # → preview → Google Service Account → Manage your Google Service Account Key for Push Notifications (FCM V1) → Set up → upload the JSON
+   ```
+3. Notifications start working without a rebuild, as long as `google-services.json` was in the project when you built.
+
+**5. Deploy the rules** (section 1) if you haven't already. The APK needs them.
+
+### End-to-end test checklist (use two phones or two accounts)
+
+| # | Do this | Expect |
+|---|---|---|
+| 1 | Register with email on phone A, open the verification email | Account created, profile shows your name |
+| 2 | Sign in with Google on phone B | Signs in (if it fails, check step 3 above) |
+| 3 | Allow notifications when asked on both phones | Profile → Notifications switch is ON |
+| 4 | A: Report **lost** "Black HP laptop bag", Library, with photo | Shows in Lost feed with thumbnail |
+| 5 | B: Report **found** "HP laptop bag black", Library | A gets "Someone may have found your item!"; both see it on Matches |
+| 6 | A: open B's found item → **Claim** with a proof detail | B gets "New claim" notification; Profile tab badge shows 1 |
+| 7 | B: open item → approve the claim | A gets "Approved!"; chat opens for both |
+| 8 | Chat both ways | Each side gets a message notification; tapping it opens the chat |
+| 9 | B: **Mark returned** | Both items show Returned; A gets "Case closed"; Returned counter goes up |
+| 10 | Share a post, toggle Light/Dark theme, filter feeds, "Only mine" | All behave |
+| 11 | Turn on airplane mode and try to post | Friendly "You appear to be offline" message |
+| 12 | Make yourself admin (section 1), open the Admin tab | Can search users, warn/block, dismiss reports |
+| 13 | Log out on A, log in as another user on A, then send A's old account a message | The new user doesn't get the old account's notifications |
+| 14 | Profile → Delete account (log in again first) | Account and its posts are removed |
+
+### Updating the app later
+Change code → `eas build --platform android --profile preview` → install the new APK over the old one. Your data stays because it's in Firebase.
+For the Play Store, use `--profile production` (makes an `.aab`); see section 2.
 
 ---
 

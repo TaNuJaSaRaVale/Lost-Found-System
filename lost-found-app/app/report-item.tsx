@@ -6,6 +6,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
 import { useColors } from '../hooks/useTheme';
 import { createItem, processImage, ProcessedImage } from '../services/items';
+import { notifyMatches } from '../services/push';
 import { CAMPUS_LOCATIONS, CATEGORIES, LIMITS } from '../constants/config';
 import { Button, Chip, Field } from '../components/ui';
 
@@ -101,6 +102,7 @@ export default function ReportItemScreen() {
       else data.currentlyAt = currentlyAt.trim();
 
       const id = await createItem(isLost ? 'lost_items' : 'found_items', data, image);
+      notifyMatches(isLost ? 'lost_items' : 'found_items', id, data);
       router.replace({ pathname: '/item/[id]', params: { id, type: isLost ? 'lost_items' : 'found_items', justPosted: '1' } });
     } catch (error: any) {
       const offline = error?.code === 'unavailable';

@@ -9,6 +9,11 @@ export const ALLOWED_EMAIL_DOMAINS: string[] = [];
 export const GOOGLE_WEB_CLIENT_ID =
   '145937489025-r4uuaugq8pj9md58s9ppqthq4sin7vv0.apps.googleusercontent.com';
 
+// Who sends push notifications:
+//  'app'       - the app sends them through Expo's free push service (works on the free Spark plan).
+//  'functions' - Cloud Functions in /functions send them (needs the Blaze plan and `firebase deploy --only functions`).
+export const PUSH_SENDER: 'app' | 'functions' = 'app';
+
 // Shown on the login/register screens and Play Store listing. Host your own policy page.
 export const PRIVACY_POLICY_URL = 'https://github.com/TaNuJaSaRaVale/Lost-Found-System/blob/main/PRIVACY.md';
 

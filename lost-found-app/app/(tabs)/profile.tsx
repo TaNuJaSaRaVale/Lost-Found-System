@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { View, Text, TouchableOpacity, Alert, ScrollView, Switch, Linking } from 'react-native';
-import { signOut, updateProfile, updatePassword, sendPasswordResetEmail, deleteUser } from 'firebase/auth';
+import { updateProfile, updatePassword, sendPasswordResetEmail, deleteUser } from 'firebase/auth';
 import { collection, query, where, onSnapshot, doc, updateDoc, getDocs, writeBatch, deleteDoc } from 'firebase/firestore';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { auth, db } from '../../services/firebase';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme, useColors, ThemePreference } from '../../hooks/useTheme';
-import { registerForPushNotificationsAsync, disablePushNotifications } from '../../services/notification';
+import { registerForPushNotificationsAsync, disablePushNotifications, forgetDeviceAndSignOut } from '../../services/notification';
 import { deleteItemCascade } from '../../services/items';
 import { Claim } from '../../services/claims';
 import { Button, Field, StatusBadge } from '../../components/ui';
@@ -147,7 +147,7 @@ export default function ProfileScreen() {
     if (Date.now() - lastSignIn > 4 * 60 * 1000) {
       Alert.alert('Please log in again', 'For your security, log out and log back in, then delete your account within a few minutes.', [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Log out now', onPress: () => signOut(auth) },
+        { text: 'Log out now', onPress: forgetDeviceAndSignOut },
       ]);
       return;
     }
@@ -157,6 +157,7 @@ export default function ProfileScreen() {
       const myClaims = await getDocs(query(collection(db, 'claims'), where('claimantId', '==', user.uid)));
       const batch = writeBatch(db);
       myClaims.docs.forEach(d => batch.delete(d.ref));
+      batch.delete(doc(db, 'push_tokens', user.uid));
       await batch.commit();
       await deleteDoc(doc(db, 'users', user.uid));
       await deleteUser(user);
@@ -302,7 +303,7 @@ export default function ProfileScreen() {
           <Row icon="key-outline" iconColor={colors.textLight} title="Change password" onPress={() => setChangingPassword(true)} />
         ))}
         <Row icon="document-text-outline" iconColor={colors.textLight} title="Privacy policy" onPress={() => Linking.openURL(PRIVACY_POLICY_URL)} />
-        <Row icon="log-out-outline" iconColor={colors.danger} title="Log out" onPress={() => signOut(auth)} />
+        <Row icon="log-out-outline" iconColor={colors.danger} title="Log out" onPress={forgetDeviceAndSignOut} />
       </Section>
 
       <TouchableOpacity onPress={confirmDeleteAccount} disabled={deleting} className="items-center py-4">

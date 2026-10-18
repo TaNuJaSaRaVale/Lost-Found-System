@@ -12,6 +12,7 @@ import {
   collection, doc, getDoc, getDocs, query, serverTimestamp, updateDoc, where, writeBatch,
 } from 'firebase/firestore';
 import { db } from './firebase';
+import { notifyUser } from './push';
 
 export type ClaimStatus = 'pending' | 'approved' | 'rejected' | 'returned' | 'withdrawn' | 'admin_direct';
 
@@ -71,11 +72,14 @@ export async function approveClaim(claim: Claim) {
     where('itemId', '==', claim.itemId),
     where('status', '==', 'pending'),
   ));
-  others.docs.forEach(d => {
-    if (d.id !== claim.id) batch.update(d.ref, { status: 'rejected', updatedAt: serverTimestamp() });
-  });
+  const declined = others.docs.filter(d => d.id !== claim.id);
+  declined.forEach(d => batch.update(d.ref, { status: 'rejected', updatedAt: serverTimestamp() }));
 
   await batch.commit();
+  notifyUser(claim.claimantId, '✅ Approved!', `Your response on "${claim.itemTitle}" was approved. Chat to arrange the handover.`,
+    { claimId: claim.id, screen: 'chat' });
+  declined.forEach(d => notifyUser(d.data().claimantId, 'Claim declined', `Your response on "${claim.itemTitle}" was declined.`,
+    { claimId: d.id, screen: 'chat' }));
 }
 
 export async function rejectClaim(claim: Claim) {
@@ -88,6 +92,8 @@ export async function rejectClaim(claim: Claim) {
     setItemStatus(batch, claim.itemType, claim.itemId, 'open', claim.id);
   }
   await batch.commit();
+  notifyUser(claim.claimantId, 'Claim declined', `Your response on "${claim.itemTitle}" was declined.`,
+    { claimId: claim.id, screen: 'chat' });
 }
 
 export async function markClaimReturned(claim: Claim) {
@@ -98,6 +104,8 @@ export async function markClaimReturned(claim: Claim) {
     setItemStatus(batch, claim.sourceItemType!, claim.sourceItemId!, 'returned', claim.id);
   }
   await batch.commit();
+  notifyUser(claim.claimantId, '🎉 Case closed', `"${claim.itemTitle}" has been marked as returned. Thanks for using Lost & Found!`,
+    { claimId: claim.id, screen: 'chat' });
 }
 
 export async function withdrawClaim(claim: Claim) {

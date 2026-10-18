@@ -10,6 +10,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { db } from '../../services/firebase';
+import { notifyUser } from '../../services/push';
 import { useAuth } from '../../context/AuthContext';
 import { useColors } from '../../hooks/useTheme';
 import { deleteItemCascade, getItemImage, markItemResolved } from '../../services/items';
@@ -126,6 +127,10 @@ export default function ItemDetailScreen() {
         updatedAt: serverTimestamp(),
       });
     }
+    notifyUser(item.userId,
+      isLostItem ? '🙌 Someone found your item!' : '📩 New claim on your found item',
+      `${profile?.name || 'Someone'} responded to "${item.title}". Review it now.`,
+      { itemId: id, itemType: type });
     setClaimModal(false);
     setProof('');
   }, isLostItem ? 'Sent! The owner has been notified and can chat with you.' : 'Claim sent! The finder will review your proof and reply in chat.');
