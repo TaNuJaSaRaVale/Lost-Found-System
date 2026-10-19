@@ -6,8 +6,8 @@ export const APP_NAME = 'Campus Lost & Found';
 // Leave empty to allow any email address.
 export const ALLOWED_EMAIL_DOMAINS: string[] = [];
 
-export const GOOGLE_WEB_CLIENT_ID =
-  '145937489025-r4uuaugq8pj9md58s9ppqthq4sin7vv0.apps.googleusercontent.com';
+// Set in .env (see .env.example) or as an EAS environment variable.
+export const GOOGLE_WEB_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ?? '';
 
 // Who sends push notifications:
 //  'app'       - the app sends them through Expo's free push service (works on the free Spark plan).

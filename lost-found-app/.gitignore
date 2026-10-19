@@ -41,3 +41,7 @@ app-example
 # generated native folders
 /ios
 /android
+
+# Firebase / Google config (kept out of git; EAS builds use the GOOGLE_SERVICES_JSON file variable)
+google-services.json
+.env

@@ -45,6 +45,7 @@ Install **Expo Go** from the Play Store, then:
 ```bash
 cd lost-found-app
 npm install
+cp .env.example .env    # then fill in the values (Firebase console → Project settings → your web app)
 npx expo start          # scan the QR code with Expo Go (phone and laptop on the same Wi-Fi)
 # Different networks or college Wi-Fi blocking it? Use:  npx expo start --tunnel
 ```
@@ -55,7 +56,7 @@ In Expo Go, **Google Sign-In and push notifications do not work** (Expo Go doesn
 
 **1. One-time Firebase setup (Firebase Console, free):**
 1. *Authentication → Sign-in method*: enable **Email/Password** and **Google**.
-2. *Project settings → Your apps → Add app → Android*, package name **`com.tanuja888.lostfoundapp`**. Download **`google-services.json`** and put it in `lost-found-app/`. (This is what makes Android notifications work.)
+2. *Project settings → Your apps → Add app → Android*, package name **`com.tanuja888.lostfoundapp`**. Download **`google-services.json`** and put it in `lost-found-app/`. (This is what makes Android notifications work.) It is git-ignored; EAS gets it from an environment variable (next step).
 
 **2. Build the APK on Expo's servers:**
 
@@ -63,7 +64,14 @@ In Expo Go, **Google Sign-In and push notifications do not work** (Expo Go doesn
 cd lost-found-app
 npm install -g eas-cli
 eas login                                  # free account at expo.dev
-git add google-services.json && git commit -m "chore: add google-services.json"   # commit it so the build is guaranteed to include it (it only holds public config)
+
+# One time: give EAS the values from your .env and google-services.json (both are kept out of git).
+# Repeat with --environment production before a Play Store build.
+while IFS='=' read -r name value; do
+  [[ "$name" == EXPO_PUBLIC_* ]] && eas env:create --environment preview --name "$name" --value "$value" --visibility plaintext --non-interactive
+done < .env
+eas env:create --environment preview --name GOOGLE_SERVICES_JSON --type file --value ./google-services.json --visibility secret --non-interactive
+
 eas build --platform android --profile preview
 ```
 
@@ -85,7 +93,7 @@ In Firebase → *Project settings → your Android app → Add fingerprint*, pas
    eas credentials --platform android
    # → preview → Google Service Account → Manage your Google Service Account Key for Push Notifications (FCM V1) → Set up → upload the JSON
    ```
-3. Notifications start working without a rebuild, as long as `google-services.json` was in the project when you built.
+3. Notifications start working without a rebuild, as long as the `GOOGLE_SERVICES_JSON` variable existed when you built.
 
 **5. Deploy the rules** (section 1) if you haven't already. The APK needs them.
 
@@ -123,7 +131,7 @@ For the Play Store, use `--profile production` (makes an `.aab`); see section 2.
 2. **EAS CLI**: `npm install -g eas-cli && eas login`.
 3. **Push notifications on Android** need Firebase Cloud Messaging credentials:
    - Firebase Console → Project settings → add an Android app with package `com.tanuja888.lostfoundapp` → download `google-services.json` into `lost-found-app/`.
-   - Add `"googleServicesFile": "./google-services.json"` under `expo.android` in `app.json`.
+   - Add it and the `.env` values to the EAS **production** environment (same commands as the APK section, with `--environment production`); `app.config.js` picks it up.
    - Firebase Console → Project settings → Service accounts → generate a key, then upload it with `eas credentials` → Android → Google Service Account → FCM V1.
 4. **Google Sign-In in release builds** (the #1 cause of "DEVELOPER_ERROR"):
    after your first upload, copy the **SHA-1 of the App signing key** from Play Console → Setup → App integrity, and add it to Firebase → Project settings → your Android app → SHA fingerprints. Also add the SHA-1 from `eas credentials` (upload key).

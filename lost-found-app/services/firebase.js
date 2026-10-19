@@ -16,14 +16,14 @@ LogBox.ignoreLogs([
   "Missing or insufficient permissions"
 ]);
 
-// Firebase project configuration
+// Firebase project configuration, read from .env (see .env.example) or EAS environment variables
 const firebaseConfig = {
-  apiKey: "AIzaSyDU9oto_VjZq4pe0v1-G1MYeC-xZC4KPtk",
-  authDomain: "lost-found-system-e745e.firebaseapp.com",
-  projectId: "lost-found-system-e745e",
-  storageBucket: "lost-found-system-e745e.firebasestorage.app",
-  messagingSenderId: "145937489025",
-  appId: "1:145937489025:web:5ca6e8d00cbef815c04180"
+  apiKey: process.env.EXPO_PUBLIC_FIREBASE_API_KEY,
+  authDomain: process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN,
+  projectId: process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID,
+  storageBucket: process.env.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: process.env.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+  appId: process.env.EXPO_PUBLIC_FIREBASE_APP_ID
 };
 
 // 1. App Singleton
